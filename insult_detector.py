@@ -14,6 +14,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn import cross_validation
 from sklearn.metrics import f1_score
+from sklearn.grid_search import GridSearchCV
 
 class InsultDetector:
     def __init__(self):
@@ -53,11 +54,12 @@ class InsultDetector:
         else:
             dataset = labeled_discussions
 
-        # dataset['data'] = ["abc abc abc bcd", "abc", "bcd", "qwe", "abc"]
-        # dataset['target'] = [True, True, False, False, True]
-
-        text_clf = Pipeline([('vect',  TfidfVectorizer(stop_words=["вы"], max_df=0.85)),
-                             ('clf',   SGDClassifier(class_weight='auto'))])
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+                             ('clf',   SGDClassifier(class_weight='auto',
+                                                     n_jobs=-1,
+                                                     alpha=1e-05,
+                                                     loss='squared_hinge',
+                                                     n_iter=10))])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
@@ -90,10 +92,49 @@ class InsultDetector:
             return self.text_clf.predict(unlabeled_discussions)
         return unlabeled_discussions
 
+    def _grid_search(self, json_data):
+        dataset = self._json_to_dataset(json_data)
+        # text_clf = Pipeline([('vect',  TfidfVectorizer()),
+        #                      ('clf',   SGDClassifier(class_weight='auto', n_jobs=-1))])
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+                             ('clf',   SGDClassifier(class_weight='auto',
+                                                     n_jobs=-1,
+                                                     loss='squared_hinge',
+                                                     n_iter=10))])
+        parameters = {
+                        'clf__alpha': (1e-4, 1e-6),
+                      # 'clf__loss': ('hinge', 'squared_hinge', 'modified_huber', 'squared_loss'),
+                      # 'clf__n_iter': (5, 10, 20),
+                      # 'clf__penalty': ('l2', 'elasticnet'),
+                      # 'vect__max_df': (0.5, 0.75, 1.0),
+                      # 'vect__ngram_range': [(1, 1), (1, 2)]
+                      }
+        gs_clf = GridSearchCV(text_clf, parameters, n_jobs=-1, scoring='f1')
+        gs_clf = gs_clf.fit(dataset['data'], dataset['target'])
+        best_parameters, score, _ = max(gs_clf.grid_scores_, key=lambda x: x[1])
+        for param_name in sorted(parameters.keys()):
+            print("%s: %r" % (param_name, best_parameters[param_name]))
+        print(score)
+
+    def _cross_validate(self, json_data):
+        dataset = self._json_to_dataset(json_data)
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+                             ('clf',   SGDClassifier(class_weight='auto',
+                                                     n_jobs=-1,
+                                                     alpha=1e-05,
+                                                     loss='squared_hinge',
+                                                     n_iter=10))])
+        score = cross_validation.cross_val_score(text_clf, dataset['data'], dataset['target'], cv=5, scoring='f1')
+        print(score)
+
     def test(self):
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
         # json_file = open('test_discussions/learn.json')
-        # json_data = json.load(json_file)
+        json_data = json.load(json_file)
+
+        # self._cross_validate(json_data)
+        self._grid_search(json_data)
+
         # print(json_data[0]["root"]["text"].encode('cp1251', errors='replace')[:50])
         # d.train(json_data)
 
@@ -102,22 +143,32 @@ class InsultDetector:
         # print(d.classify(json_test_data))
 
         # json_file = open('discussions1.json', encoding='utf-8-sig')
+        # json_data = json.load(json_file)
+        # dataset = self._json_to_dataset(json_data)
+
+        # train_dataset = dict(data=1, target=2)
+        # train_dataset['data'], test_discussions, train_dataset['target'], test_anwsers = \
+        #     cross_validation.train_test_split(dataset['data'], dataset['target'], test_size=0.3, random_state=1)
+
+        # d.train(train_dataset)
+        # predicted = d.classify(test_discussions)
+        # for i in range(len(predicted)):
+        #     if predicted[i] == True:
+        #         try:
+        #             print(test_discussions[i])
+        #         except:
+        #             pass
+        # print(f1_score(test_anwsers, predicted, pos_label=True))
+    def _test_if_i_broke_something(self):
+        # json_file = open('discussions.json', encoding='utf-8', errors='replace')
+        json_file = open('test_discussions/learn.json')
         json_data = json.load(json_file)
-        dataset = self._json_to_dataset(json_data)
+        self.train(json_data)
+        json_test = open('test_discussions/test.json')
+        json_test_data = json.load(json_test)
+        print(self.classify(json_test_data))
 
-        train_dataset = dict(data=1, target=2)
-        train_dataset['data'], test_discussions, train_dataset['target'], test_anwsers = \
-            cross_validation.train_test_split(dataset['data'], dataset['target'], test_size=0.3, random_state=1)
-
-        d.train(train_dataset)
-        predicted = d.classify(test_discussions)
-        for i in range(len(predicted)):
-            if predicted[i] == True:
-                try:
-                    print(test_discussions[i])
-                except:
-                    pass
-        print(f1_score(test_anwsers, predicted, pos_label=True))
-
-d = InsultDetector()
-d.test()
+if __name__ == '__main__':
+    d = InsultDetector()
+    d.test()
+    # d._test_if_i_broke_something()
