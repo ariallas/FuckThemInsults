@@ -3,12 +3,58 @@
 __author__ = 'tpc 2015'
 
 import json
+import re
+import nltk
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
+
+rustem = nltk.stem.snowball.RussianStemmer()
+
+def my_tokenizer(str):
+    token_pattern = re.compile(u'(?u)\w\w+'
+                               u'|\:\)+'
+                               u'|\;\)+'
+                               u'|\:\-\)+'
+                               u'|\;\-\)+'
+                               u'|\:\(+'
+                               u'|\;\(+'
+                               u'|\:\-\(+'
+                               u'|\;\-\(+'
+                               u'|\:3'
+                               u'|\(\(+'
+                               u'|\)\)+'
+                               u'|\:O'
+                               u'|\:D')
+
+    global rustem
+    tokens = token_pattern.findall(str.lower())
+    filtered_tokens = []
+    for token in tokens:
+        if re.search("[0-9]", token):
+            continue
+        elif re.match(u'\:\)+'
+                    u'|\;\)+'
+                    u'|\:\-\)+'
+                    u'|\;\-\)+'
+                    u'|\:\(+'
+                    u'|\;\(+'
+                    u'|\:\-\(+'
+                    u'|\;\-\(+'
+                    u'|\:3'
+                    u'|\:O'
+                    u'|\:D', token):
+            token = u':)'
+        elif re.match(u'\(\(+', token):
+            token = u'('
+        elif re.match(u'\)\)+', token):
+            token = u')'
+        # filtered_tokens.append(rustem.stem(token))
+        filtered_tokens.append(token)
+    return filtered_tokens
 
 class InsultDetector:
     def __init__(self):
@@ -90,22 +136,44 @@ class InsultDetector:
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
+                                                       ngram_range=(1, 2),
+                                                       tokenizer=my_tokenizer)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
                                                      alpha=5e-6,
                                                      loss='squared_hinge',
                                                      n_iter=10))])
-        score = cross_validation.cross_val_score(text_clf, dataset['data'], dataset['target'], cv=5, scoring='f1')
+        score = cross_validation.cross_val_score(text_clf,
+                                                 dataset['data'],
+                                                 dataset['target'],
+                                                 cv=5,
+                                                 scoring='f1',
+                                                 n_jobs=-1)
         print(score)
+
+    def test_tokenizer(self, json_data):
+        dataset = self._json_to_dataset(json_data)
+
+        tok = TfidfVectorizer().build_tokenizer()
+        for text in dataset['data'][:20]:
+            try:
+                print(text)
+                print(my_tokenizer(text))
+            except:
+                pass
+        exit()
 
     def test(self):
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
         # json_file = open('test_discussions/learn.json')
+
         json_data = json.load(json_file)
 
         self._cross_validate(json_data)
         # self._grid_search(json_data)
+        # self.test_tokenizer(json_data)
+        # self.train(json_data)
 
     def _test_if_i_broke_something(self):
         # json_file = open('discussions.json', encoding='utf-8', errors='replace')
