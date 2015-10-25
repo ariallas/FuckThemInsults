@@ -1,10 +1,8 @@
 
-
 __author__ = 'tpc 2015'
 
 import json
 import re
-import nltk
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -12,47 +10,31 @@ from sklearn.pipeline import Pipeline
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
 
-rustem = nltk.stem.snowball.RussianStemmer()
+word_regexp = re.compile(u"(?u)\w+"
+                         u"|\:\)+"
+                         u"|\;\)+"
+                         u"|\:\-\)+"
+                         u"|\;\-\)+"
+                         u"|\(\(+"
+                         u"|\)\)+"
+                         u"|!+"
+                         u"|\?+")
 
 def my_tokenizer(str):
-    token_pattern = re.compile(u'(?u)\w\w+'
-                               u'|\:\)+'
-                               u'|\;\)+'
-                               u'|\:\-\)+'
-                               u'|\;\-\)+'
-                               u'|\:\(+'
-                               u'|\;\(+'
-                               u'|\:\-\(+'
-                               u'|\;\-\(+'
-                               u'|\:3'
-                               u'|\(\(+'
-                               u'|\)\)+'
-                               u'|\:O'
-                               u'|\:D')
-
-    global rustem
-    tokens = token_pattern.findall(str.lower())
+    tokens = word_regexp.findall(str.lower())
     filtered_tokens = []
     for token in tokens:
-        if re.search("[0-9]", token):
-            continue
-        elif re.match(u'\:\)+'
-                    u'|\;\)+'
-                    u'|\:\-\)+'
-                    u'|\;\-\)+'
-                    u'|\:\(+'
-                    u'|\;\(+'
-                    u'|\:\-\(+'
-                    u'|\;\-\(+'
-                    u'|\:3'
-                    u'|\:O'
-                    u'|\:D', token):
-            token = u':)'
-        elif re.match(u'\(\(+', token):
-            token = u'('
-        elif re.match(u'\)\)+', token):
-            token = u')'
-        # filtered_tokens.append(rustem.stem(token))
+        ch = token[0]
+        if ch == ':' or ch == ';':
+            token = ':)'
+        elif ch == '(':
+            token = '('
+        elif ch == ')':
+            token = ')'
+        elif ch == '?':
+            token = '?'
+        elif ch == '!':
+            token = '!'
         filtered_tokens.append(token)
     return filtered_tokens
 
@@ -84,7 +66,9 @@ class InsultDetector:
         else:
             dataset = labeled_discussions
 
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
+                                                       ngram_range=(1, 2),
+                                                       tokenizer=my_tokenizer)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
                                                      alpha=5e-06,
@@ -184,7 +168,7 @@ class InsultDetector:
         json_test_data = json.load(json_test)
         print(self.classify(json_test_data))
 
-if __name__ == '__main__':
-    d = InsultDetector()
-    d.test()
+# if __name__ == '__main__':
+#     d = InsultDetector()
+    # d.test()
     # d._test_if_i_broke_something()
