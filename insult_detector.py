@@ -3,13 +3,16 @@ __author__ = 'tpc 2015'
 
 import json
 import re
+# import pymorphy2
 
 from sklearn.linear_model import SGDClassifier
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.pipeline import Pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
+from sklearn.base import TransformerMixin
 
+# rustem = pymorphy2.MorphAnalyzer()
 word_regexp = re.compile(u"(?u)\w+"
                          u"|\:\)+"
                          u"|\;\)+"
@@ -35,8 +38,17 @@ def my_tokenizer(str):
             token = '?'
         elif ch == '!':
             token = '!'
+        # elif len(token) > 3:
+        #     token = rustem.parse(token)[0].normal_form
         filtered_tokens.append(token)
     return filtered_tokens
+
+class StrLengthTransformer(TransformerMixin):
+    def transform(self, texts):
+        return [{'length': len(text), 'num_sentences': text.count('.')} for text in texts]
+
+    def fit(self, X, y=None, **fit_params):
+        return self
 
 class InsultDetector:
     def __init__(self):
@@ -149,15 +161,32 @@ class InsultDetector:
         exit()
 
     def test(self):
-        json_file = open('discussions.json', encoding='utf-8', errors='replace')
-        # json_file = open('test_discussions/learn.json')
+        # json_file = open('discussions.json', encoding='utf-8', errors='replace')
+        json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
 
         json_data = json.load(json_file)
 
-        self._cross_validate(json_data)
+        # self._cross_validate(json_data)
         # self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
+
+        fun = FeatureUnion([
+            ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
+            ('strlen', StrLengthTransformer())
+        ])
+
+        st = StrLengthTransformer()
+        vt = CountVectorizer()
+
+        dataset = self._json_to_dataset(json_data)
+        res = fun.fit_transform(dataset['data'])
+        print(res)
+        # print(st.transform(dataset['data']))
+        # print(vt.fit_transform(dataset['data']))
+
+        # print(res)
+        # print(fun.vocabulary_)
 
     def _test_if_i_broke_something(self):
         # json_file = open('discussions.json', encoding='utf-8', errors='replace')
@@ -168,7 +197,7 @@ class InsultDetector:
         json_test_data = json.load(json_test)
         print(self.classify(json_test_data))
 
-# if __name__ == '__main__':
-#     d = InsultDetector()
-    # d.test()
-    # d._test_if_i_broke_something()
+if __name__ == '__main__':
+    d = InsultDetector()
+    d.test()
+#     d._test_if_i_broke_something()
