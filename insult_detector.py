@@ -3,7 +3,8 @@ __author__ = 'tpc 2015'
 
 import json
 import re
-# import pymorphy2
+import numpy
+from scipy import sparse
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -22,6 +23,7 @@ word_regexp = re.compile(u"(?u)\w+"
                          u"|\)\)+"
                          u"|!+"
                          u"|\?+")
+
 
 def my_tokenizer(str):
     tokens = word_regexp.findall(str.lower())
@@ -43,12 +45,15 @@ def my_tokenizer(str):
         filtered_tokens.append(token)
     return filtered_tokens
 
+
 class StrLengthTransformer(TransformerMixin):
     def transform(self, texts):
-        return [{'length': len(text), 'num_sentences': text.count('.')} for text in texts]
+        lens = numpy.array([[len(text)] for text in texts])
+        return sparse.csr_matrix(lens)
 
-    def fit(self, X, y=None, **fit_params):
+    def fit(self, texts, y=None):
         return self
+
 
 class InsultDetector:
     def __init__(self):
@@ -132,14 +137,18 @@ class InsultDetector:
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
-                                                       ngram_range=(1, 2),
-                                                       tokenizer=my_tokenizer)),
-                             ('clf',   SGDClassifier(class_weight='auto',
-                                                     n_jobs=-1,
-                                                     alpha=5e-6,
-                                                     loss='squared_hinge',
-                                                     n_iter=10))])
+        text_clf = Pipeline([
+            ('vect', FeatureUnion([
+                ('tfidf', TfidfVectorizer(max_df=0.75,
+                                          ngram_range=(1, 2),
+                                          tokenizer=my_tokenizer)),
+                ('strlen', StrLengthTransformer())
+            ])),
+            ('clf',   SGDClassifier(class_weight='auto',
+                                    n_jobs=-1,
+                                    alpha=5e-6,
+                                    loss='squared_hinge',
+                                    n_iter=10))])
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
@@ -161,27 +170,27 @@ class InsultDetector:
         exit()
 
     def test(self):
-        # json_file = open('discussions.json', encoding='utf-8', errors='replace')
-        json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
+        json_file = open('discussions.json', encoding='utf-8', errors='replace')
+        # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
 
         json_data = json.load(json_file)
 
-        # self._cross_validate(json_data)
+        self._cross_validate(json_data)
         # self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
 
-        fun = FeatureUnion([
-            ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
-            ('strlen', StrLengthTransformer())
-        ])
+        # fun = FeatureUnion([
+        #     ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
+        #     ('strlen', StrLengthTransformer())
+        # ])
+        #
+        # st = StrLengthTransformer()
+        # vt = CountVectorizer()
 
-        st = StrLengthTransformer()
-        vt = CountVectorizer()
-
-        dataset = self._json_to_dataset(json_data)
-        res = fun.fit_transform(dataset['data'])
-        print(res)
+        # dataset = self._json_to_dataset(json_data)
+        # res = fun.fit_transform(dataset['data'])
+        # print(res)
         # print(st.transform(dataset['data']))
         # print(vt.fit_transform(dataset['data']))
 
