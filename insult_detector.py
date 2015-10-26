@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 __author__ = 'tpc 2015'
 
 import json
@@ -12,6 +12,8 @@ from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
 from sklearn.base import TransformerMixin
+from sklearn.metrics import f1_score
+from sklearn.svm.classes import SVC
 
 # rustem = pymorphy2.MorphAnalyzer()
 word_regexp = re.compile(u"(?u)\w+"
@@ -48,8 +50,30 @@ def my_tokenizer(str):
 
 class StrLengthTransformer(TransformerMixin):
     def transform(self, texts):
-        lens = numpy.array([[len(text)] for text in texts])
+        m = max([len(text) for text in texts])
+        lens = [[len(text) / m] for text in texts]
         return sparse.csr_matrix(lens)
+
+    def fit(self, texts, y=None):
+        return self
+
+class AddressTransformet(TransformerMixin):
+    def transform(self, texts):
+        addresses = []
+        address_regexp = re.compile(u"(?u)вы|ваш|вас|вам|ваши|ты|твой|твоё|тебе|он|она|вами")
+        for text in texts:
+            ads = len(address_regexp.findall(text))
+            # if ads > 1:
+            #     addresses.append([1])
+            # else:
+            #     addresses.append([0])
+
+            words_cnt = len(re.findall(u"(?u)\w\w+", text))
+            if (words_cnt > 0):
+                addresses.append([ads / words_cnt])
+            else:
+                 addresses.append([0])
+        return sparse.csr_matrix(addresses)
 
     def fit(self, texts, y=None):
         return self
@@ -77,21 +101,46 @@ class InsultDetector:
 
         return dataset
 
+    def _reduce_dataset(self, dataset):
+        set_length = len(dataset['data'])
+        num_insults = 0
+
+        reduced_dataset = dict(data=1, target=2)
+        reduced_dataset['data'] = []
+        reduced_dataset['target'] = []
+
+        for i in range(set_length):
+            if dataset['target'][i]:
+                num_insults += 1
+                reduced_dataset['data'].append(dataset['data'][i])
+                reduced_dataset['target'].append(True)
+        step = set_length / num_insults
+
+        for i in range(0, set_length,  round(step)):
+            if not dataset['target'][i]:
+                reduced_dataset['data'].append(dataset['data'][i])
+                reduced_dataset['target'].append(False)
+
+        print(len(reduced_dataset['data']), num_insults)
+        return reduced_dataset
+
     def train(self, labeled_discussions):
         if (type(labeled_discussions) is list): # for cross validation
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
+        dataset = self._reduce_dataset(dataset)
 
         text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
                                                        ngram_range=(1, 2),
                                                        tokenizer=my_tokenizer)),
-                             ('clf',   SGDClassifier(class_weight='auto',
-                                                     n_jobs=-1,
-                                                     alpha=5e-06,
-                                                     loss='squared_hinge',
-                                                     n_iter=10))])
-
+                             # ('clf',   SGDClassifier(class_weight='auto',
+                             #                         n_jobs=-1,
+                             #                         alpha=5e-06,
+                             #                         loss='squared_hinge',
+                             #                         n_iter=10))
+                             ('clf',   SVC())
+                             ])
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
     def classify(self, unlabeled_discussions):
@@ -137,22 +186,26 @@ class InsultDetector:
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
+        dataset = self._reduce_dataset(dataset)
+
         text_clf = Pipeline([
             ('vect', FeatureUnion([
                 ('tfidf', TfidfVectorizer(max_df=0.75,
                                           ngram_range=(1, 2),
                                           tokenizer=my_tokenizer)),
-                ('strlen', StrLengthTransformer())
+                ('addreses', AddressTransformet())
             ])),
-            ('clf',   SGDClassifier(class_weight='auto',
-                                    n_jobs=-1,
-                                    alpha=5e-6,
-                                    loss='squared_hinge',
-                                    n_iter=10))])
+            # ('clf',   SGDClassifier(class_weight='auto',
+            #                         n_jobs=-1,
+            #                         alpha=5e-6,
+            #                         loss='squared_hinge',
+            #                         n_iter=10))
+            ('clf',   SVC())
+        ])
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
-                                                 cv=5,
+                                                 cv=2,
                                                  scoring='f1',
                                                  n_jobs=-1)
         print(score)
@@ -184,11 +237,11 @@ class InsultDetector:
         #     ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
         #     ('strlen', StrLengthTransformer())
         # ])
-        #
         # st = StrLengthTransformer()
         # vt = CountVectorizer()
 
         # dataset = self._json_to_dataset(json_data)
+        # dataset = self._reduce_dataset(dataset)
         # res = fun.fit_transform(dataset['data'])
         # print(res)
         # print(st.transform(dataset['data']))
@@ -196,6 +249,21 @@ class InsultDetector:
 
         # print(res)
         # print(fun.vocabulary_)
+
+        # dataset = self._json_to_dataset(json_data)
+        # at = AddressTransformet()
+        # ins = []
+        # for i in range(len(dataset['data'])):
+        #     if (dataset['target'][i]):
+        #         ins.append(dataset['data'][i])
+        # print(at.transform(ins))
+    def _test_split(self):
+        json_file = open('discussions.json', encoding='utf-8', errors='replace')
+        # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
+        json_data = json.load(json_file)
+        dataset = self._json_to_dataset(json_data)
+        self.train(dataset)
+        print(f1_score(dataset['target'], self.text_clf.predict(dataset['data']), pos_label=True))
 
     def _test_if_i_broke_something(self):
         # json_file = open('discussions.json', encoding='utf-8', errors='replace')
@@ -208,5 +276,6 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    d.test()
+    # d.test()
+    d._test_split()
 #     d._test_if_i_broke_something()
