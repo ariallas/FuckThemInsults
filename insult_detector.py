@@ -3,7 +3,7 @@ __author__ = 'tpc 2015'
 
 import json
 import re
-import numpy
+# import numpy
 from scipy import sparse
 # import nltk
 # import pymorphy2
@@ -31,12 +31,19 @@ word_regexp = re.compile(u"(?u)\w+"
 # rustem = nltk.stem.snowball.RussianStemmer()
 # rustem = pymorphy2.MorphAnalyzer()
 
+bad_words_part = None
+bad_words_begin = None
+stop_words = None
+
 def my_tokenizer(str):
+    global stop_words
     tokens = word_regexp.findall(str.lower())
     filtered_tokens = []
     for token in tokens:
         ch = token[0]
-        if ch == ':' or ch == ';':
+        if token in stop_words:
+            continue
+        elif ch == ':' or ch == ';':
             token = ':)'
         elif ch == '(':
             token = '('
@@ -48,50 +55,78 @@ def my_tokenizer(str):
             token = '!'
         elif ch >= '0' and ch <= '9':
             continue
-        # else:
             # token = rustem.stem(token)
             # token = rustem.parse(token)[0].normal_form
         filtered_tokens.append(token)
     return filtered_tokens
 
 
-class AddressTransformet(TransformerMixin):
-    def __init__(self, var=0):
-        self.var = var
+class InsultFeatures(TransformerMixin):
+    def __init__(self):
+        pass
 
     def transform(self, texts):
-        addresses = []
-        address_regexp = re.compile(u"(?u)вы|ваш|вас|вам|ваши|ты|твой|твоё|тебе|он|автор"
-                                    u"|она|вами|твоего|вашего|свой|своего|вашей")
+        global bad_words_part, bad_words_begin
+        features = []
+        address_regexp = re.compile(u"(?u)^вы$|^ваш$|^вас$|^вам$|^ваши$|^ты$|^твой$|^твоё$|^тебе$|^он$|^автор$"
+                                    u"|^она$|^вами$|^твоего$|^вашего$|^свой$|^своего$|^вашей$|^уважаемый$")
+
         for text in texts:
+            this_features = []
+
             ads = len(address_regexp.findall(text))
-            if self.var == 0:
-                if ads > 1:
-                    addresses.append([1])
-                else:
-                    addresses.append([0])
+            if ads < 5:
+                this_features.append(ads / 5)
             else:
-                if (ads < 5):
-                    addresses.append([ads / 5])
-                else:
-                    addresses.append([1])
-        return sparse.csr_matrix(addresses)
+                this_features.append(1)
+
+            is_preious_insult = False
+            is_previous_address = False
+            near_ins = 0
+            for token in my_tokenizer(text):
+                is_address = False
+                is_insult = False
+                if address_regexp.match(token):
+                    is_address = True
+                for ins in bad_words_part:
+                    if ins in token:
+                        is_insult = True
+                        break
+                for ins in bad_words_begin:
+                    if token.startswith(ins):
+                        is_insult = True
+                        break
+                if is_preious_insult and is_insult or is_previous_address and is_insult:
+                    near_ins += 1
+                is_preious_insult = is_insult
+                is_previous_address = is_address
+            this_features.append(near_ins)
+
+            features.append(this_features)
+        return sparse.csr_matrix(features)
 
     def fit(self, texts, y=None):
         return self
 
     def get_params(self, deep=True):
-        return {"var": self.var}
+        return {}
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():
-            self.var = value
+            #self.var = value
+            pass
         return self
 
 
 class InsultDetector:
     def __init__(self):
-        pass
+        global stop_words, bad_words_begin, bad_words_part
+        with open('insult_words_part.txt', mode='r', encoding='utf-8') as f:
+            bad_words_part = f.read().splitlines()
+        with open('insult_words_begin.txt', mode='r', encoding='utf-8') as f:
+            bad_words_begin = f.read().splitlines()
+        with open('stop_words.txt', mode='r', encoding='utf-8') as f:
+            stop_words = f.read().splitlines()
 
     def _json_to_dataset(self, json_data):
         dataset = dict(data=1, target=2)
@@ -135,7 +170,7 @@ class InsultDetector:
         return reduced_dataset
 
     def train(self, labeled_discussions):
-        if (type(labeled_discussions) is list): # for cross validation
+        if type(labeled_discussions) is list:  # for cross validation
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
@@ -153,12 +188,11 @@ class InsultDetector:
         #                 verbose=True))
         # ])
 
-        # stop_words =
         text_clf = Pipeline([
             ('vect', FeatureUnion([
                 ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                           tokenizer=my_tokenizer)),
-                ('addreses', AddressTransformet(var=1))
+                ('addreses', InsultFeatures())
             ])),
             ('clf',   SGDClassifier(class_weight='auto',
                                     n_jobs=-1,
@@ -235,27 +269,41 @@ class InsultDetector:
         dataset = self._json_to_dataset(json_data)
         # dataset = self._reduce_dataset(dataset)
 
+        # text_clf = Pipeline([
+        #     ('vect', FeatureUnion([
+        #         ('tfidf', TfidfVectorizer(max_df=1.0,
+        #                                   ngram_range=(1, 2),
+        #                                   tokenizer=my_tokenizer)),
+        #         ('addreses', AddressTransformet(var=1))
+        #     ])),
+        #     ('clf',   SGDClassifier(class_weight='auto',
+        #                             n_jobs=-1,
+        #                             penalty='elasticnet',
+        #                             alpha=1e-6,
+        #                             loss='hinge',
+        #                             n_iter=10))
+        #     # ('clf', SVC(kernel='linear'))
+        # ])
         text_clf = Pipeline([
             ('vect', FeatureUnion([
-                ('tfidf', TfidfVectorizer(max_df=1.0,
-                                          ngram_range=(1, 2),
+                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                           tokenizer=my_tokenizer)),
-                ('addreses', AddressTransformet(var=1))
+                ('addreses', InsultFeatures())
             ])),
             ('clf',   SGDClassifier(class_weight='auto',
                                     n_jobs=-1,
                                     penalty='elasticnet',
-                                    alpha=1e-6,
+                                    alpha=9e-7,
                                     loss='hinge',
                                     n_iter=10))
-            # ('clf', SVC(kernel='linear'))
         ])
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
                                                  cv=5,
                                                  scoring='f1',
-                                                 n_jobs=-1)
+                                                 n_jobs=1,
+                                                 verbose=5)
         print(score)
 
     def test_tokenizer(self, json_data):
@@ -276,7 +324,7 @@ class InsultDetector:
 
         json_data = json.load(json_file)
 
-        # self._cross_validate(json_data)
+        self._cross_validate(json_data)
         # self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
@@ -298,22 +346,28 @@ class InsultDetector:
         # print(res)
         # print(fun.vocabulary_)
 
-        dataset = self._json_to_dataset(json_data)
-        at = AddressTransformet()
-        ins = []
-        for i in range(len(dataset['data'])):
-            if (dataset['target'][i]):
-                ins.append(dataset['data'][i])
-        d = dict()
-        for i in ins:
-            for tok in my_tokenizer(i):
-                d.setdefault(tok, 0)
-                d[tok] += 1
-
-        import operator
-        for i in sorted(d.items(), key=operator.itemgetter(1)):
-            if (i[1] > 10):
-                print(i)
+        # dataset = self._json_to_dataset(json_data)
+        # at = AddressTransformet()
+        # ins = []
+        # for i in range(len(dataset['data'])):
+        #     if (dataset['target'][i]):
+        #         ins.append(dataset['data'][i])
+        # d = dict()
+        # for i in dataset['data']:
+        #     for tok in my_tokenizer(i):
+        #         for w in bad_words_part:
+        #             if w in tok:
+        #                 d.setdefault(tok, 0)
+        #                 d[tok] += 1
+        #         for w in bad_words_begin:
+        #             if tok.startswith(w):
+        #                 d.setdefault(tok, 0)
+        #                 d[tok] += 1
+        #
+        # import operator
+        # for i in sorted(d.items(), key=operator.itemgetter(1)):
+        #     if (i[1] > 10):
+        #         print(i)
 
         # print(at.transform(ins))
     def _test_split(self):
@@ -343,5 +397,5 @@ class InsultDetector:
 if __name__ == '__main__':
     d = InsultDetector()
     d.test()
-#    d._test_split()
+    # d._test_split()
 #     d._test_if_i_broke_something()
