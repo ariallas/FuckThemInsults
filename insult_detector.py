@@ -5,6 +5,7 @@ import json
 import re
 import numpy
 from scipy import sparse
+import nltk
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -15,7 +16,8 @@ from sklearn.base import TransformerMixin
 from sklearn.metrics import f1_score
 from sklearn.svm.classes import SVC
 
-# rustem = pymorphy2.MorphAnalyzer()
+rustem = nltk.stem.snowball.RussianStemmer()
+
 word_regexp = re.compile(u"(?u)\w+"
                          u"|\:\)+"
                          u"|\;\)+"
@@ -42,8 +44,8 @@ def my_tokenizer(str):
             token = '?'
         elif ch == '!':
             token = '!'
-        # elif len(token) > 3:
-        #     token = rustem.parse(token)[0].normal_form
+        elif len(token) > 3:
+            token = rustem.stem(token)
         filtered_tokens.append(token)
     return filtered_tokens
 
@@ -58,24 +60,35 @@ class StrLengthTransformer(TransformerMixin):
         return self
 
 class AddressTransformet(TransformerMixin):
+    def __init__(self, var=0):
+        self.var = var
+
     def transform(self, texts):
         addresses = []
         address_regexp = re.compile(u"(?u)вы|ваш|вас|вам|ваши|ты|твой|твоё|тебе|он|она|вами")
         for text in texts:
             ads = len(address_regexp.findall(text))
-            # if ads > 1:
-            #     addresses.append([1])
-            # else:
-            #     addresses.append([0])
-
-            words_cnt = len(re.findall(u"(?u)\w\w+", text))
-            if (words_cnt > 0):
-                addresses.append([ads / words_cnt])
+            if self.var == 0:
+                if ads > 1:
+                    addresses.append([1])
+                else:
+                    addresses.append([0])
             else:
-                 addresses.append([0])
+                if (ads < 5):
+                    addresses.append([ads / 5])
+                else:
+                    addresses.append([1])
         return sparse.csr_matrix(addresses)
 
     def fit(self, texts, y=None):
+        return self
+
+    def get_params(self, deep=True):
+        return {"var": self.var}
+
+    def set_params(self, **parameters):
+        for parameter, value in parameters.items():
+            self.var = value
         return self
 
 
@@ -114,7 +127,7 @@ class InsultDetector:
                 num_insults += 1
                 reduced_dataset['data'].append(dataset['data'][i])
                 reduced_dataset['target'].append(True)
-        step = set_length / num_insults
+        step = set_length / num_insults / 4
 
         for i in range(0, set_length,  round(step)):
             if not dataset['target'][i]:
@@ -129,18 +142,25 @@ class InsultDetector:
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
-        dataset = self._reduce_dataset(dataset)
+        # dataset = self._reduce_dataset(dataset)
 
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
-                                                       ngram_range=(1, 2),
-                                                       tokenizer=my_tokenizer)),
-                             # ('clf',   SGDClassifier(class_weight='auto',
-                             #                         n_jobs=-1,
-                             #                         alpha=5e-06,
-                             #                         loss='squared_hinge',
-                             #                         n_iter=10))
-                             ('clf',   SVC())
-                             ])
+        # text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 2),
+        #                                                tokenizer=my_tokenizer)),
+        #                      ('clf',   SVC(kernel='linear', C=1))
+        #                      ])
+        text_clf = Pipeline([
+            ('vect', FeatureUnion([
+                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
+                                          tokenizer=my_tokenizer)),
+                ('addreses', AddressTransformet(var=1))
+            ])),
+            ('clf',   SGDClassifier(class_weight='auto',
+                                    n_jobs=-1,
+                                    penalty='elasticnet',
+                                    alpha=9e-7,
+                                    loss='hinge',
+                                    n_iter=10))
+        ])
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
     def classify(self, unlabeled_discussions):
@@ -164,48 +184,58 @@ class InsultDetector:
         dataset = self._json_to_dataset(json_data)
         # text_clf = Pipeline([('vect',  TfidfVectorizer()),
         #                      ('clf',   SGDClassifier(class_weight='auto', n_jobs=-1))])
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
-                             ('clf',   SGDClassifier(class_weight='auto',
-                                                     n_jobs=-1,
-                                                     loss='squared_hinge',
-                                                     n_iter=5))])
-        parameters = {
-                        'clf__alpha': (678e-8, 679e-8, 680e-8),
-                      # 'clf__loss': ('hinge', 'squared_hinge', 'modified_huber', 'squared_loss'),
-                      # 'clf__n_iter': (5, 10, 20),
-                      # 'clf__penalty': ('l2', 'elasticnet'),
-                      # 'vect__max_df': (0.5, 0.75, 1.0),
-                      # 'vect__ngram_range': [(1, 1), (1, 2)]
+        # text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+        #                      ('clf',   SGDClassifier(class_weight='auto',
+        #                                              n_jobs=-1,
+        #                                              loss='squared_hinge',
+        #                                              n_iter=5))])
+        text_clf = Pipeline([
+            ('vect', FeatureUnion([
+                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
+                                          tokenizer=my_tokenizer)),
+                ('addreses', AddressTransformet())
+            ])),
+            ('clf',   SGDClassifier(class_weight='auto',
+                                    n_jobs=-1
+                                    ))
+        ])
+        parameters = {'clf__alpha': (1e-4, 1e-5, 1e-6, 1e-7),
+                      'clf__loss': ('hinge', 'squared_hinge', 'squared_loss'),
+                      'clf__penalty': ('l2', 'elasticnet', 'l1'),
+                      'vect__tfidf__max_df': (0.75, 0.9, 1.0),
+                      'vect__tfidf__use_idf': (True, False),
+                      'vect__addreses__var': (0, 1)
                       }
-        gs_clf = GridSearchCV(text_clf, parameters, n_jobs=-1, scoring='f1')
+        gs_clf = GridSearchCV(text_clf, parameters, n_jobs=-1, scoring='f1', verbose=5)
         gs_clf = gs_clf.fit(dataset['data'], dataset['target'])
         best_parameters, score, _ = max(gs_clf.grid_scores_, key=lambda x: x[1])
         for param_name in sorted(parameters.keys()):
-            print("%s: %.10f" % (param_name, best_parameters[param_name]))
+            print("%s: %r" % (param_name, best_parameters[param_name]))
         print(score)
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        dataset = self._reduce_dataset(dataset)
+        # dataset = self._reduce_dataset(dataset)
 
         text_clf = Pipeline([
             ('vect', FeatureUnion([
-                ('tfidf', TfidfVectorizer(max_df=0.75,
+                ('tfidf', TfidfVectorizer(max_df=1.0,
                                           ngram_range=(1, 2),
                                           tokenizer=my_tokenizer)),
-                ('addreses', AddressTransformet())
+                ('addreses', AddressTransformet(var=1))
             ])),
-            # ('clf',   SGDClassifier(class_weight='auto',
-            #                         n_jobs=-1,
-            #                         alpha=5e-6,
-            #                         loss='squared_hinge',
-            #                         n_iter=10))
-            ('clf',   SVC())
+            ('clf',   SGDClassifier(class_weight='auto',
+                                    n_jobs=-1,
+                                    penalty='elasticnet',
+                                    alpha=1e-6,
+                                    loss='hinge',
+                                    n_iter=10))
+            # ('clf', SVC(kernel='linear'))
         ])
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
-                                                 cv=2,
+                                                 cv=5,
                                                  scoring='f1',
                                                  n_jobs=-1)
         print(score)
@@ -228,8 +258,8 @@ class InsultDetector:
 
         json_data = json.load(json_file)
 
-        self._cross_validate(json_data)
-        # self._grid_search(json_data)
+        # self._cross_validate(json_data)
+        self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
 
@@ -261,9 +291,13 @@ class InsultDetector:
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
         # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
         json_data = json.load(json_file)
+
         dataset = self._json_to_dataset(json_data)
+        dataset['data'], data_test, dataset['target'], target_test \
+            = cross_validation.train_test_split(dataset['data'], dataset['target'], test_size=0.3, random_state=1)
+
         self.train(dataset)
-        print(f1_score(dataset['target'], self.text_clf.predict(dataset['data']), pos_label=True))
+        print(f1_score(target_test, self.text_clf.predict(data_test), pos_label=True))
 
     def _test_if_i_broke_something(self):
         # json_file = open('discussions.json', encoding='utf-8', errors='replace')
@@ -276,6 +310,6 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    # d.test()
-    d._test_split()
+    d.test()
+    # d._test_split()
 #     d._test_if_i_broke_something()
