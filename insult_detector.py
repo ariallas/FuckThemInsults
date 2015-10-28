@@ -31,19 +31,12 @@ word_regexp = re.compile(u"(?u)\w+"
 # rustem = nltk.stem.snowball.RussianStemmer()
 # rustem = pymorphy2.MorphAnalyzer()
 
-bad_words_part = None
-bad_words_begin = None
-stop_words = None
-
 def my_tokenizer(str):
-    global stop_words
     tokens = word_regexp.findall(str.lower())
     filtered_tokens = []
     for token in tokens:
         ch = token[0]
-        if token in stop_words:
-            continue
-        elif ch == ':' or ch == ';':
+        if ch == ':' or ch == ';':
             token = ':)'
         elif ch == '(':
             token = '('
@@ -62,11 +55,11 @@ def my_tokenizer(str):
 
 
 class InsultFeatures(TransformerMixin):
-    def __init__(self):
-        pass
+    def __init__(self, bad_words_part, bad_words_begin):
+        self.bad_words_part = bad_words_part
+        self.bad_words_begin = bad_words_begin
 
     def transform(self, texts):
-        global bad_words_part, bad_words_begin
         features = []
         address_regexp = re.compile(u"(?u)^вы$|^ваш$|^вас$|^вам$|^ваши$|^ты$|^твой$|^твоё$|^тебе$|^он$|^автор$"
                                     u"|^она$|^вами$|^твоего$|^вашего$|^свой$|^своего$|^вашей$|^уважаемый$")
@@ -88,11 +81,11 @@ class InsultFeatures(TransformerMixin):
                 is_insult = False
                 if address_regexp.match(token):
                     is_address = True
-                for ins in bad_words_part:
+                for ins in self.bad_words_part:
                     if ins in token:
                         is_insult = True
                         break
-                for ins in bad_words_begin:
+                for ins in self.bad_words_begin:
                     if token.startswith(ins):
                         is_insult = True
                         break
@@ -100,6 +93,8 @@ class InsultFeatures(TransformerMixin):
                     near_ins += 1
                 is_preious_insult = is_insult
                 is_previous_address = is_address
+            if near_ins > 0:
+                near_ins += 5
             this_features.append(near_ins)
 
             features.append(this_features)
@@ -113,20 +108,19 @@ class InsultFeatures(TransformerMixin):
 
     def set_params(self, **parameters):
         for parameter, value in parameters.items():
-            #self.var = value
             pass
         return self
 
 
 class InsultDetector:
     def __init__(self):
-        global stop_words, bad_words_begin, bad_words_part
         with open('insult_words_part.txt', mode='r', encoding='utf-8') as f:
-            bad_words_part = f.read().splitlines()
+            self.bad_words_part = f.read().splitlines()
         with open('insult_words_begin.txt', mode='r', encoding='utf-8') as f:
-            bad_words_begin = f.read().splitlines()
+            self.bad_words_begin = f.read().splitlines()
         with open('stop_words.txt', mode='r', encoding='utf-8') as f:
-            stop_words = f.read().splitlines()
+            self.stop_words = f.read().splitlines()
+        self.text_clf = None
 
     def _json_to_dataset(self, json_data):
         dataset = dict(data=1, target=2)
@@ -146,7 +140,8 @@ class InsultDetector:
 
         return dataset
 
-    def _reduce_dataset(self, dataset):
+    @staticmethod
+    def _reduce_dataset(dataset):
         set_length = len(dataset['data'])
         num_insults = 0
 
@@ -174,7 +169,7 @@ class InsultDetector:
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
-        # dataset = self._reduce_dataset(dataset)
+        dataset = self._reduce_dataset(dataset)
 
         # text_clf = Pipeline([
         #     ('vect', FeatureUnion([
@@ -189,17 +184,27 @@ class InsultDetector:
         # ])
 
         text_clf = Pipeline([
-            ('vect', FeatureUnion([
-                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                          tokenizer=my_tokenizer)),
-                ('addreses', InsultFeatures())
-            ])),
-            ('clf',   SGDClassifier(class_weight='auto',
-                                    n_jobs=-1,
-                                    penalty='elasticnet',
-                                    alpha=9e-7,
-                                    loss='hinge',
-                                    n_iter=10))
+            ('vect', FeatureUnion(
+                transformer_list=[
+                    ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
+                                              tokenizer=my_tokenizer,
+                                              stop_words=self.stop_words)),
+                    ('addreses', InsultFeatures(bad_words_part=self.bad_words_part,
+                                                bad_words_begin=self.bad_words_begin))
+                ],
+                transformer_weights={
+                    'tfidf': 0.5,
+                    'addreses': 1.0
+                })),
+            # ('clf',   SGDClassifier(class_weight='auto',
+            #                         n_jobs=-1,
+            #                         penalty='l2',
+            #                         alpha=5e-7,
+            #                         loss='hinge',
+            #                         n_iter=10))
+            ('clf', SVC(C=1,
+                        kernel='linear',
+                        verbose=True))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
@@ -285,11 +290,15 @@ class InsultDetector:
         #     # ('clf', SVC(kernel='linear'))
         # ])
         text_clf = Pipeline([
-            ('vect', FeatureUnion([
+            ('vect', FeatureUnion(
+                [
                 ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                          tokenizer=my_tokenizer)),
-                ('addreses', InsultFeatures())
-            ])),
+                                          tokenizer=my_tokenizer,
+                                          stop_words=self.stop_words)),
+                ('inaults', InsultFeatures(bad_words_part=self.bad_words_part,
+                                           bad_words_begin=self.bad_words_begin))
+                ]
+            )),
             ('clf',   SGDClassifier(class_weight='auto',
                                     n_jobs=-1,
                                     penalty='elasticnet',
@@ -302,7 +311,7 @@ class InsultDetector:
                                                  dataset['target'],
                                                  cv=5,
                                                  scoring='f1',
-                                                 n_jobs=1,
+                                                 n_jobs=-1,
                                                  verbose=5)
         print(score)
 
@@ -396,6 +405,6 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    d.test()
-    # d._test_split()
+    # d.test()
+    d._test_split()
 #     d._test_if_i_broke_something()
