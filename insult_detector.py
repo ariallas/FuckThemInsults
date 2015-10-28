@@ -9,6 +9,7 @@ from scipy import sparse
 # import nltk
 # import pymorphy2
 import time
+import fnmatch
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
@@ -21,16 +22,21 @@ from sklearn.svm.classes import SVC
 
 import random
 
-word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|=\)+|\(\(+|\)\)+|!+|\?|\++[0-9]+")
+word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++")
+with open('stop_words.txt', mode='r', encoding='utf-8') as f:
+    stop_words = f.read().splitlines()
 
 # rustem = nltk.stem.snowball.RussianStemmer()
 # rustem = pymorphy2.MorphAnalyzer()
 
-def my_tokenizer(str):
-    tokens = word_regexp.findall(str.lower())
+
+def my_tokenizer(text):
+    tokens = word_regexp.findall(text.lower())
     filtered_tokens = []
     for token in tokens:
         ch = token[0]
+        if token in stop_words:
+            continue
         if ch == ':' or ch == ';' or ch == '=' or ch == '%':
             token = ':)'
         elif ch == '(':
@@ -50,56 +56,65 @@ def my_tokenizer(str):
 
 
 class InsultFeatures(TransformerMixin):
-    def __init__(self, bad_words_part, bad_words_begin, address_words):
-        self.bad_words_part = bad_words_part
-        self.bad_words_begin = bad_words_begin
-        self.address_words = address_words
-
-    def _count_addresses(self, tokens):
-        cnt = 0
-        for token in tokens:
-            if token in self.address_words:
-                cnt += 1
-        return cnt
+    def __init__(self, insult_words_regex, address_words_regex):
+        self.insult_words_regex = insult_words_regex
+        self.address_words_regex = address_words_regex
 
     def transform(self, texts):
         features = []
+
+        positive_texts = 0
 
         for text in texts:
             this_features = []
             tokens = my_tokenizer(text)
 
-            ads = self._count_addresses(tokens)
-            if len(tokens) > 0:
-                this_features.append(ads / len(tokens))
-            else:
-                print(text)
+            insult_range = 0
+            address_range = 0
+            directed_insults = 0
+            total_insults = 0
 
-            is_preious_insult = False
-            is_previous_address = False
-            near_ins = 0
-            for token in my_tokenizer(text):
+            was_insult = 0
+
+            pattern = []
+
+            for token in tokens:
                 is_address = False
                 is_insult = False
-                if token:
+
+                # pattern.append(token)
+                if self.address_words_regex.match(token):
                     is_address = True
-                for ins in self.bad_words_part:
-                    if ins in token:
-                        is_insult = True
-                        break
-                for ins in self.bad_words_begin:
-                    if token.startswith(ins):
-                        is_insult = True
-                        break
-                if is_preious_insult and is_insult or is_previous_address and is_insult:
-                    near_ins += 1
-                is_preious_insult = is_insult
-                is_previous_address = is_address
-            if near_ins > 0:
-                near_ins += 5
-            # this_features.append(near_ins)
+                if self.insult_words_regex.match(token):  #fnmatch.fnmatch(token, ins):
+                    is_insult = True
+                    total_insults += 1
+                if insult_range > 0 and is_insult or address_range > 0 and is_insult:
+                    directed_insults += 1
+                    # print(pattern)
+                    was_insult = 1
+                if is_insult:
+                    insult_range = 3
+                else:
+                    insult_range -= 1
+                if is_address:
+                    address_range = 3
+                else:
+                    address_range -= 1
+                # if len(pattern) > 3:
+                #     pattern = pattern[1:]
+            if directed_insults > 1:
+                directed_insults += 5
+
+            positive_texts += was_insult
+            # this_features.append(directed_insults)
+            if len(tokens) > 0:
+                this_features.append(total_insults / len(tokens))
+            else:
+                this_features.append(0)
 
             features.append(this_features)
+
+        print(positive_texts, positive_texts / len(texts))
         return sparse.csr_matrix(features)
 
     def fit(self, texts, y=None):
@@ -116,15 +131,14 @@ class InsultFeatures(TransformerMixin):
 
 class InsultDetector:
     def __init__(self):
-        with open('insult_words_part.txt', mode='r', encoding='utf-8') as f:
-            self.bad_words_part = f.read().splitlines()
-        with open('insult_words_begin.txt', mode='r', encoding='utf-8') as f:
-            self.bad_words_begin = f.read().splitlines()
-        with open('stop_words.txt', mode='r', encoding='utf-8') as f:
-            self.stop_words = f.read().splitlines()
+        with open('insult_words.txt', mode='r', encoding='utf-8') as f:
+            insult_words = f.read().splitlines()
         with open('address_words.txt', mode='r', encoding='utf-8') as f:
-            self.address_words = f.read().splitlines()
+            address_words = f.read().splitlines()
+
         self.text_clf = None
+        self.insult_words_regex = self.create_regex(insult_words)
+        self.address_words_regex = self.create_regex(address_words)
 
     def _json_to_dataset(self, json_data):
         dataset = dict(data=1, target=2)
@@ -143,6 +157,15 @@ class InsultDetector:
             _iterate(root["root"])
 
         return dataset
+
+    @staticmethod
+    def create_regex(expression_list):
+        regex_str = '^('
+        for exp in expression_list:
+            regex_str += exp + '|'
+        regex_str = regex_str[:-1] + ')$'
+        regex = re.compile(regex_str)
+        return regex
 
     @staticmethod
     def _reduce_dataset(dataset):
@@ -193,8 +216,7 @@ class InsultDetector:
                     ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                               tokenizer=my_tokenizer,
                                               stop_words=self.stop_words)),
-                    ('addreses', InsultFeatures(bad_words_part=self.bad_words_part,
-                                                bad_words_begin=self.bad_words_begin))
+                    ('addreses', InsultFeatures(self.insult_words_regex, self.address_words_regex))
                 ],
                 transformer_weights={
                     'tfidf': 0.5,
@@ -299,8 +321,7 @@ class InsultDetector:
                 ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                           tokenizer=my_tokenizer,
                                           stop_words=self.stop_words)),
-                ('inaults', InsultFeatures(bad_words_part=self.bad_words_part,
-                                           bad_words_begin=self.bad_words_begin))
+                ('inaults', InsultFeatures(self.insult_words))
                 ]
             )),
             ('clf',   SGDClassifier(class_weight='auto',
@@ -333,7 +354,7 @@ class InsultDetector:
 
     def plot_some_graphs(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        at = InsultFeatures(self.bad_words_part, self.bad_words_begin, self.address_words)
+        at = InsultFeatures(self.insult_words_regex, self.address_words_regex)
 
         ins = []
         not_ins = []
@@ -343,14 +364,16 @@ class InsultDetector:
             else:
                 not_ins.append(dataset['data'][i])
 
+        print(len(not_ins), len(ins))
         ins_array = at.transform(ins).toarray()
         not_ins_array = at.transform(not_ins).toarray()
 
         rand_arr_ins = [random.random() * 10. for i in range(len(ins_array))]
         rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
 
-        # plt.plot(ins_array[:, 0], rand_arr_ins[:], 'r.')
-        plt.plot(not_ins_array, rand_arr_not_ins, 'b.')
+        plt.plot(ins_array[:, 0], rand_arr_ins, 'r.')
+        # plt.plot(not_ins_array[:3000, 0], rand_arr_not_ins[:3000], 'b.')
+        plt.plot(not_ins_array[:, 0], rand_arr_not_ins, 'b.')
 
         plt.show()
 
