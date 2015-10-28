@@ -3,7 +3,8 @@ __author__ = 'tpc 2015'
 
 import json
 import re
-# import numpy
+import numpy as np
+import matplotlib.pyplot as plt
 from scipy import sparse
 # import nltk
 # import pymorphy2
@@ -18,15 +19,9 @@ from sklearn.base import TransformerMixin
 from sklearn.metrics import f1_score
 from sklearn.svm.classes import SVC
 
-word_regexp = re.compile(u"(?u)\w+"
-                         u"|\:\)+"
-                         u"|\;\)+"
-                         u"|\:\-\)+"
-                         u"|\;\-\)+"
-                         u"|\(\(+"
-                         u"|\)\)+"
-                         u"|!+"
-                         u"|\?+")
+import random
+
+word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|=\)+|\(\(+|\)\)+|!+|\?|\++[0-9]+")
 
 # rustem = nltk.stem.snowball.RussianStemmer()
 # rustem = pymorphy2.MorphAnalyzer()
@@ -36,7 +31,7 @@ def my_tokenizer(str):
     filtered_tokens = []
     for token in tokens:
         ch = token[0]
-        if ch == ':' or ch == ';':
+        if ch == ':' or ch == ';' or ch == '=' or ch == '%':
             token = ':)'
         elif ch == '(':
             token = '('
@@ -46,32 +41,39 @@ def my_tokenizer(str):
             token = '?'
         elif ch == '!':
             token = '!'
-        elif ch >= '0' and ch <= '9':
+        elif ch == '+':
+            token = '+'
+        elif '0' <= ch <= '9':
             continue
-            # token = rustem.stem(token)
-            # token = rustem.parse(token)[0].normal_form
         filtered_tokens.append(token)
     return filtered_tokens
 
 
 class InsultFeatures(TransformerMixin):
-    def __init__(self, bad_words_part, bad_words_begin):
+    def __init__(self, bad_words_part, bad_words_begin, address_words):
         self.bad_words_part = bad_words_part
         self.bad_words_begin = bad_words_begin
+        self.address_words = address_words
+
+    def _count_addresses(self, tokens):
+        cnt = 0
+        for token in tokens:
+            if token in self.address_words:
+                cnt += 1
+        return cnt
 
     def transform(self, texts):
         features = []
-        address_regexp = re.compile(u"(?u)^вы$|^ваш$|^вас$|^вам$|^ваши$|^ты$|^твой$|^твоё$|^тебе$|^он$|^автор$"
-                                    u"|^она$|^вами$|^твоего$|^вашего$|^свой$|^своего$|^вашей$|^уважаемый$")
 
         for text in texts:
             this_features = []
+            tokens = my_tokenizer(text)
 
-            ads = len(address_regexp.findall(text))
-            if ads < 5:
-                this_features.append(ads / 5)
+            ads = self._count_addresses(tokens)
+            if len(tokens) > 0:
+                this_features.append(ads / len(tokens))
             else:
-                this_features.append(1)
+                print(text)
 
             is_preious_insult = False
             is_previous_address = False
@@ -79,7 +81,7 @@ class InsultFeatures(TransformerMixin):
             for token in my_tokenizer(text):
                 is_address = False
                 is_insult = False
-                if address_regexp.match(token):
+                if token:
                     is_address = True
                 for ins in self.bad_words_part:
                     if ins in token:
@@ -95,7 +97,7 @@ class InsultFeatures(TransformerMixin):
                 is_previous_address = is_address
             if near_ins > 0:
                 near_ins += 5
-            this_features.append(near_ins)
+            # this_features.append(near_ins)
 
             features.append(this_features)
         return sparse.csr_matrix(features)
@@ -120,6 +122,8 @@ class InsultDetector:
             self.bad_words_begin = f.read().splitlines()
         with open('stop_words.txt', mode='r', encoding='utf-8') as f:
             self.stop_words = f.read().splitlines()
+        with open('address_words.txt', mode='r', encoding='utf-8') as f:
+            self.address_words = f.read().splitlines()
         self.text_clf = None
 
     def _json_to_dataset(self, json_data):
@@ -327,16 +331,40 @@ class InsultDetector:
                 pass
         exit()
 
+    def plot_some_graphs(self, json_data):
+        dataset = self._json_to_dataset(json_data)
+        at = InsultFeatures(self.bad_words_part, self.bad_words_begin, self.address_words)
+
+        ins = []
+        not_ins = []
+        for i in range(len(dataset['target'])):
+            if dataset['target'][i]:
+                ins.append(dataset['data'][i])
+            else:
+                not_ins.append(dataset['data'][i])
+
+        ins_array = at.transform(ins).toarray()
+        not_ins_array = at.transform(not_ins).toarray()
+
+        rand_arr_ins = [random.random() * 10. for i in range(len(ins_array))]
+        rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
+
+        # plt.plot(ins_array[:, 0], rand_arr_ins[:], 'r.')
+        plt.plot(not_ins_array, rand_arr_not_ins, 'b.')
+
+        plt.show()
+
     def test(self):
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
         # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
 
         json_data = json.load(json_file)
 
-        self._cross_validate(json_data)
+        # self._cross_validate(json_data)
         # self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
+        self.plot_some_graphs(json_data)
 
         # fun = FeatureUnion([
         #     ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
@@ -405,6 +433,6 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    # d.test()
-    d._test_split()
+    d.test()
+    # d._test_split()
 #     d._test_if_i_broke_something()
