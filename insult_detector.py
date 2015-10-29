@@ -1,6 +1,4 @@
 # -*- coding: utf-8 -*-
-__author__ = 'tpc 2015'
-
 import json
 import re
 import numpy as np
@@ -9,10 +7,9 @@ from scipy import sparse
 # import nltk
 # import pymorphy2
 import time
-import fnmatch
 
 from sklearn.linear_model import SGDClassifier
-from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
@@ -21,6 +18,8 @@ from sklearn.metrics import f1_score
 from sklearn.svm.classes import SVC
 
 import random
+
+__author__ = 'tpc 2015'
 
 word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++")
 with open('stop_words.txt', mode='r', encoding='utf-8') as f:
@@ -73,6 +72,7 @@ class InsultFeatures(TransformerMixin):
             address_range = 0
             directed_insults = 0
             total_insults = 0
+            token_count = 0
 
             was_insult = 0
 
@@ -85,10 +85,10 @@ class InsultFeatures(TransformerMixin):
                 # pattern.append(token)
                 if self.address_words_regex.match(token):
                     is_address = True
-                if self.insult_words_regex.match(token):  #fnmatch.fnmatch(token, ins):
+                if self.insult_words_regex.match(token):
                     is_insult = True
                     total_insults += 1
-                if insult_range > 0 and is_insult or address_range > 0 and is_insult:
+                if insult_range > 0 and (is_insult or is_address) or address_range > 0 and is_insult:
                     directed_insults += 1
                     # print(pattern)
                     was_insult = 1
@@ -100,17 +100,21 @@ class InsultFeatures(TransformerMixin):
                     address_range = 3
                 else:
                     address_range -= 1
+                token_count += 1
                 # if len(pattern) > 3:
                 #     pattern = pattern[1:]
+
             if directed_insults > 1:
                 directed_insults += 5
+            if len(tokens) == 0:
+                insults_ratio = 0
+            else:
+                insults_ratio = total_insults / len(tokens)
 
             positive_texts += was_insult
             # this_features.append(directed_insults)
-            if len(tokens) > 0:
-                this_features.append(total_insults / len(tokens))
-            else:
-                this_features.append(0)
+            # this_features.append(len(text))
+            # this_features.append(insults_ratio)
 
             features.append(this_features)
 
@@ -131,10 +135,10 @@ class InsultFeatures(TransformerMixin):
 
 class InsultDetector:
     def __init__(self):
-        with open('insult_words.txt', mode='r', encoding='utf-8') as f:
-            insult_words = f.read().splitlines()
-        with open('address_words.txt', mode='r', encoding='utf-8') as f:
-            address_words = f.read().splitlines()
+        with open('insult_words.txt', mode='r', encoding='utf-8') as file:
+            insult_words = file.read().splitlines()
+        with open('address_words.txt', mode='r', encoding='utf-8') as file:
+            address_words = file.read().splitlines()
 
         self.text_clf = None
         self.insult_words_regex = self.create_regex(insult_words)
@@ -214,8 +218,7 @@ class InsultDetector:
             ('vect', FeatureUnion(
                 transformer_list=[
                     ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                              tokenizer=my_tokenizer,
-                                              stop_words=self.stop_words)),
+                                              tokenizer=my_tokenizer)),
                     ('addreses', InsultFeatures(self.insult_words_regex, self.address_words_regex))
                 ],
                 transformer_weights={
@@ -245,7 +248,7 @@ class InsultDetector:
                 for child in discussion['children']:
                     _iterate(child)
 
-        if type(unlabeled_discussions[0]) is dict: # for easier cross validation
+        if type(unlabeled_discussions[0]) is dict:  # for easier cross validation
             for root in unlabeled_discussions:
                 _iterate(root["root"])
         else:
@@ -343,7 +346,6 @@ class InsultDetector:
     def test_tokenizer(self, json_data):
         dataset = self._json_to_dataset(json_data)
 
-        tok = TfidfVectorizer().build_tokenizer()
         for text in dataset['data'][:20]:
             try:
                 print(text)
@@ -354,6 +356,7 @@ class InsultDetector:
 
     def plot_some_graphs(self, json_data):
         dataset = self._json_to_dataset(json_data)
+        # dataset = self._reduce_dataset(dataset)
         at = InsultFeatures(self.insult_words_regex, self.address_words_regex)
 
         ins = []
@@ -372,8 +375,10 @@ class InsultDetector:
         rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
 
         plt.plot(ins_array[:, 0], rand_arr_ins, 'r.')
-        # plt.plot(not_ins_array[:3000, 0], rand_arr_not_ins[:3000], 'b.')
         plt.plot(not_ins_array[:, 0], rand_arr_not_ins, 'b.')
+
+        # plt.plot(ins_array[:, 0], ins_array[:, 1], 'r.')
+        # plt.plot(not_ins_array[:, 0], not_ins_array[:, 1], 'b.')
 
         plt.show()
 
