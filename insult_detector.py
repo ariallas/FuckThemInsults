@@ -4,8 +4,6 @@ import re
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
-# import nltk
-# import pymorphy2
 import time
 
 from sklearn.linear_model import SGDClassifier
@@ -15,6 +13,7 @@ from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
 from sklearn.base import TransformerMixin
 from sklearn.metrics import f1_score
+from sklearn.svm.classes import LinearSVC
 from sklearn.svm.classes import SVC
 
 import random
@@ -24,9 +23,6 @@ __author__ = 'tpc 2015'
 word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++")
 with open('stop_words.txt', mode='r', encoding='utf-8') as f:
     stop_words = f.read().splitlines()
-
-# rustem = nltk.stem.snowball.RussianStemmer()
-# rustem = pymorphy2.MorphAnalyzer()
 
 
 def my_tokenizer(text):
@@ -55,21 +51,25 @@ def my_tokenizer(text):
 
 
 class InsultFeatures(TransformerMixin):
-    def __init__(self, insult_words_regex, address_words_regex):
+    def __init__(self, insult_words_regex, address_words_regex, weak_insult_words_regex):
         self.insult_words_regex = insult_words_regex
         self.address_words_regex = address_words_regex
+        self.weak_insult_words_regex = weak_insult_words_regex
 
     def transform(self, texts):
         features = []
 
         positive_texts = 0
 
+        # Some advanced level text processing!
         for text in texts:
             this_features = []
             tokens = my_tokenizer(text)
 
             insult_range = 0
             address_range = 0
+            weak_insult_range = 0
+
             directed_insults = 0
             total_insults = 0
             token_count = 0
@@ -81,31 +81,44 @@ class InsultFeatures(TransformerMixin):
             for token in tokens:
                 is_address = False
                 is_insult = False
+                is_weak_insult = False
 
-                # pattern.append(token)
+                pattern.append(token)
                 if self.address_words_regex.match(token):
                     is_address = True
-                if self.insult_words_regex.match(token):
+                elif self.insult_words_regex.match(token):
                     is_insult = True
+                elif self.weak_insult_words_regex.match(token):
+                    is_weak_insult = True
+
+                # Just insults, not super accurate..
+                if is_insult or (address_range > 0 or insult_range > 0) and is_weak_insult:
                     total_insults += 1
-                if insult_range > 0 and (is_insult or is_address) or address_range > 0 and is_insult:
+                    was_insult = 1
+
+                # More direct insults
+                if \
+                        insult_range > 0 and (is_insult or is_address or is_weak_insult) \
+                        or address_range > 0 and (is_insult or is_weak_insult) \
+                        or weak_insult_range > 0 and (is_insult or is_address):
                     directed_insults += 1
                     # print(pattern)
-                    was_insult = 1
+
+                insult_range -= 1
+                address_range -= 1
+                weak_insult_range -= 1
+
                 if is_insult:
                     insult_range = 3
-                else:
-                    insult_range -= 1
-                if is_address:
+                elif is_address:
                     address_range = 3
-                else:
-                    address_range -= 1
-                token_count += 1
-                # if len(pattern) > 3:
-                #     pattern = pattern[1:]
+                elif is_weak_insult:
+                    weak_insult_range = 2
 
-            if directed_insults > 1:
-                directed_insults += 5
+                token_count += 1
+                if len(pattern) > 3:
+                    pattern = pattern[1:]
+
             if len(tokens) == 0:
                 insults_ratio = 0
             else:
@@ -113,8 +126,9 @@ class InsultFeatures(TransformerMixin):
 
             positive_texts += was_insult
             # this_features.append(directed_insults)
-            # this_features.append(len(text))
-            # this_features.append(insults_ratio)
+            this_features.append(len(text))
+            # this_features.append(total_insults)
+            this_features.append(insults_ratio)
 
             features.append(this_features)
 
@@ -139,10 +153,13 @@ class InsultDetector:
             insult_words = file.read().splitlines()
         with open('address_words.txt', mode='r', encoding='utf-8') as file:
             address_words = file.read().splitlines()
+        with open('weak_insults.txt', mode='r', encoding='utf-8') as file:
+            weak_insult_words = file.read().splitlines()
 
         self.text_clf = None
         self.insult_words_regex = self.create_regex(insult_words)
         self.address_words_regex = self.create_regex(address_words)
+        self.weak_insult_words_regex = self.create_regex(weak_insult_words)
 
     def _json_to_dataset(self, json_data):
         dataset = dict(data=1, target=2)
@@ -200,40 +217,23 @@ class InsultDetector:
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
-        dataset = self._reduce_dataset(dataset)
-
-        # text_clf = Pipeline([
-        #     ('vect', FeatureUnion([
-        #         ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-        #                                   tokenizer=my_tokenizer)),
-        #             ('addreses', AddressTransformet(var=1))
-        #         ])),
-        #     ('clf', SVC(#class_weight='auto',
-        #                 C=0.1,
-        #                 kernel='linear',
-        #                 verbose=True))
-        # ])
+        # dataset = self._reduce_dataset(dataset)
 
         text_clf = Pipeline([
             ('vect', FeatureUnion(
                 transformer_list=[
                     ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                               tokenizer=my_tokenizer)),
-                    ('addreses', InsultFeatures(self.insult_words_regex, self.address_words_regex))
+                    ('insults', InsultFeatures(self.insult_words_regex,
+                                               self.address_words_regex,
+                                               self.weak_insult_words_regex))
                 ],
                 transformer_weights={
-                    'tfidf': 0.5,
-                    'addreses': 1.0
+                    'tfidf': 0.6,
+                    'insults': 1.0
                 })),
-            # ('clf',   SGDClassifier(class_weight='auto',
-            #                         n_jobs=-1,
-            #                         penalty='l2',
-            #                         alpha=5e-7,
-            #                         loss='hinge',
-            #                         n_iter=10))
-            ('clf', SVC(C=1,
-                        kernel='linear',
-                        verbose=True))
+
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='poly'))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
@@ -257,29 +257,13 @@ class InsultDetector:
 
     def _grid_search(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        # text_clf = Pipeline([('vect',  TfidfVectorizer()),
-        #                      ('clf',   SGDClassifier(class_weight='auto', n_jobs=-1))])
-        # text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
-        #                      ('clf',   SGDClassifier(class_weight='auto',
-        #                                              n_jobs=-1,
-        #                                              loss='squared_hinge',
-        #                                              n_iter=5))])
-        # text_clf = Pipeline([
-        #     ('vect', FeatureUnion([
-        #         ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-        #                                   tokenizer=my_tokenizer)),
-        #         ('addreses', AddressTransformet())
-        #     ])),
-        #     ('clf',   SGDClassifier(class_weight='auto',
-        #                             n_jobs=-1
-        #                             ))
-        # ])
+
         # dataset = self._reduce_dataset(dataset)
         text_clf = Pipeline([
             ('vect', FeatureUnion([
                 ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                           tokenizer=my_tokenizer)),
-                ('addreses', AddressTransformet(var=1))
+                ('addreses', InsultFeatures())
             ])),
             ('clf', SVC())
         ])
@@ -303,28 +287,12 @@ class InsultDetector:
         dataset = self._json_to_dataset(json_data)
         # dataset = self._reduce_dataset(dataset)
 
-        # text_clf = Pipeline([
-        #     ('vect', FeatureUnion([
-        #         ('tfidf', TfidfVectorizer(max_df=1.0,
-        #                                   ngram_range=(1, 2),
-        #                                   tokenizer=my_tokenizer)),
-        #         ('addreses', AddressTransformet(var=1))
-        #     ])),
-        #     ('clf',   SGDClassifier(class_weight='auto',
-        #                             n_jobs=-1,
-        #                             penalty='elasticnet',
-        #                             alpha=1e-6,
-        #                             loss='hinge',
-        #                             n_iter=10))
-        #     # ('clf', SVC(kernel='linear'))
-        # ])
         text_clf = Pipeline([
             ('vect', FeatureUnion(
                 [
                 ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                          tokenizer=my_tokenizer,
-                                          stop_words=self.stop_words)),
-                ('inaults', InsultFeatures(self.insult_words))
+                                          tokenizer=my_tokenizer)),
+                ('inaults', InsultFeatures())
                 ]
             )),
             ('clf',   SGDClassifier(class_weight='auto',
@@ -357,7 +325,7 @@ class InsultDetector:
     def plot_some_graphs(self, json_data):
         dataset = self._json_to_dataset(json_data)
         # dataset = self._reduce_dataset(dataset)
-        at = InsultFeatures(self.insult_words_regex, self.address_words_regex)
+        at = InsultFeatures(self.insult_words_regex, self.address_words_regex, self.weak_insult_words_regex)
 
         ins = []
         not_ins = []
@@ -374,11 +342,11 @@ class InsultDetector:
         rand_arr_ins = [random.random() * 10. for i in range(len(ins_array))]
         rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
 
-        plt.plot(ins_array[:, 0], rand_arr_ins, 'r.')
-        plt.plot(not_ins_array[:, 0], rand_arr_not_ins, 'b.')
+        # plt.plot(ins_array[:, 0], rand_arr_ins, 'r.')
+        # plt.plot(not_ins_array[:, 0], rand_arr_not_ins, 'b.')
 
-        # plt.plot(ins_array[:, 0], ins_array[:, 1], 'r.')
-        # plt.plot(not_ins_array[:, 0], not_ins_array[:, 1], 'b.')
+        plt.plot(ins_array[:, 0], ins_array[:, 1], 'r.')
+        plt.plot(not_ins_array[:, 0], not_ins_array[:, 1], 'b.')
 
         plt.show()
 
@@ -393,23 +361,6 @@ class InsultDetector:
         # self.test_tokenizer(json_data)
         # self.train(json_data)
         self.plot_some_graphs(json_data)
-
-        # fun = FeatureUnion([
-        #     ('tfidf', TfidfVectorizer(ngram_range=(1, 2))),
-        #     ('strlen', StrLengthTransformer())
-        # ])
-        # st = StrLengthTransformer()
-        # vt = CountVectorizer()
-
-        # dataset = self._json_to_dataset(json_data)
-        # dataset = self._reduce_dataset(dataset)
-        # res = fun.fit_transform(dataset['data'])
-        # print(res)
-        # print(st.transform(dataset['data']))
-        # print(vt.fit_transform(dataset['data']))
-
-        # print(res)
-        # print(fun.vocabulary_)
 
         # dataset = self._json_to_dataset(json_data)
         # at = AddressTransformet()
@@ -451,7 +402,6 @@ class InsultDetector:
         print("--- %.1f ---" % ((time.time() - start_time) / 60))
 
     def _test_if_i_broke_something(self):
-        # json_file = open('discussions.json', encoding='utf-8', errors='replace')
         json_file = open('test_discussions/learn.json')
         json_data = json.load(json_file)
         self.train(json_data)
@@ -461,6 +411,6 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    d.test()
-    # d._test_split()
+    # d.test()
+    d._test_split()
 #     d._test_if_i_broke_something()

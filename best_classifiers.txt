@@ -1,0 +1,13 @@
+('clf',   SGDClassifier(class_weight='auto',
+                        n_jobs=-1,
+                        penalty='l2',
+                        alpha=5e-7,
+                        loss='hinge',
+                        n_iter=10))
+
+('clf',   SGDClassifier(class_weight='auto',
+                        n_jobs=-1,
+                        penalty='elasticnet',
+                        alpha=1e-6,
+                        loss='hinge',
+                        n_iter=10))
