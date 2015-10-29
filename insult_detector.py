@@ -71,9 +71,10 @@ class InsultFeatures(TransformerMixin):
 
             ads = self._count_addresses(tokens)
             if len(tokens) > 0:
-                this_features.append(ads / len(tokens))
+                this_features.append(ads)
             else:
-                print(text)
+                this_features.append(0)
+            was_insult = 0
 
             is_preious_insult = False
             is_previous_address = False
@@ -86,6 +87,7 @@ class InsultFeatures(TransformerMixin):
                 for ins in self.bad_words_part:
                     if ins in token:
                         is_insult = True
+                        was_insult = 1
                         break
                 for ins in self.bad_words_begin:
                     if token.startswith(ins):
@@ -98,6 +100,8 @@ class InsultFeatures(TransformerMixin):
             if near_ins > 0:
                 near_ins += 5
             # this_features.append(near_ins)
+            if was_insult == 0:
+                print(text)
 
             features.append(this_features)
         return sparse.csr_matrix(features)
@@ -344,12 +348,12 @@ class InsultDetector:
                 not_ins.append(dataset['data'][i])
 
         ins_array = at.transform(ins).toarray()
-        not_ins_array = at.transform(not_ins).toarray()
+        # not_ins_array = at.transform(not_ins).toarray()
 
         rand_arr_ins = [random.random() * 10. for i in range(len(ins_array))]
         rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
 
-        # plt.plot(ins_array[:, 0], rand_arr_ins[:], 'r.')
+        plt.plot(ins_array[:, 0], rand_arr_ins[:], 'r.')
         plt.plot(not_ins_array, rand_arr_not_ins, 'b.')
 
         plt.show()
