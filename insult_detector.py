@@ -56,6 +56,71 @@ class InsultFeatures(TransformerMixin):
         self.address_words_regex = address_words_regex
         self.weak_insult_words_regex = weak_insult_words_regex
 
+    def text_features(self, text):
+        this_features = []
+        tokens = my_tokenizer(text)
+
+        insult_range = 0
+        address_range = 0
+        weak_insult_range = 0
+
+        directed_insults = 0
+        total_insults = 0
+        token_count = 0
+
+        pattern = []
+
+        for token in tokens:
+            is_address = False
+            is_insult = False
+            is_weak_insult = False
+
+            pattern.append(token)
+            if self.address_words_regex.match(token):
+                is_address = True
+            elif self.insult_words_regex.match(token):
+                is_insult = True
+            elif self.weak_insult_words_regex.match(token):
+                is_weak_insult = True
+
+            # Just insults, not super accurate..
+            if is_insult or (address_range > 0 or insult_range > 0) and is_weak_insult:
+                total_insults += 1
+
+            # More direct insults
+            if \
+                    insult_range > 0 and (is_insult or is_address or is_weak_insult) \
+                    or address_range > 0 and (is_insult or is_weak_insult) \
+                    or weak_insult_range > 0 and (is_insult or is_address):
+                directed_insults += 1
+                # print(pattern)
+
+            insult_range -= 1
+            address_range -= 1
+            weak_insult_range -= 1
+
+            if is_insult:
+                insult_range = 3
+            elif is_address:
+                address_range = 3
+            elif is_weak_insult:
+                weak_insult_range = 2
+
+            token_count += 1
+            if len(pattern) > 3:
+                pattern = pattern[1:]
+
+        if len(tokens) == 0:
+            insults_ratio = 0
+        else:
+            insults_ratio = total_insults / len(tokens)
+
+        this_features.append(directed_insults)
+        # this_features.append(len(text))
+        # this_features.append(total_insults)
+        # this_features.append(insults_ratio)
+        return this_features
+
     def transform(self, texts):
         features = []
 
@@ -63,73 +128,7 @@ class InsultFeatures(TransformerMixin):
 
         # Some advanced level text processing!
         for text in texts:
-            this_features = []
-            tokens = my_tokenizer(text)
-
-            insult_range = 0
-            address_range = 0
-            weak_insult_range = 0
-
-            directed_insults = 0
-            total_insults = 0
-            token_count = 0
-
-            was_insult = 0
-
-            pattern = []
-
-            for token in tokens:
-                is_address = False
-                is_insult = False
-                is_weak_insult = False
-
-                pattern.append(token)
-                if self.address_words_regex.match(token):
-                    is_address = True
-                elif self.insult_words_regex.match(token):
-                    is_insult = True
-                elif self.weak_insult_words_regex.match(token):
-                    is_weak_insult = True
-
-                # Just insults, not super accurate..
-                if is_insult or (address_range > 0 or insult_range > 0) and is_weak_insult:
-                    total_insults += 1
-                    was_insult = 1
-
-                # More direct insults
-                if \
-                        insult_range > 0 and (is_insult or is_address or is_weak_insult) \
-                        or address_range > 0 and (is_insult or is_weak_insult) \
-                        or weak_insult_range > 0 and (is_insult or is_address):
-                    directed_insults += 1
-                    # print(pattern)
-
-                insult_range -= 1
-                address_range -= 1
-                weak_insult_range -= 1
-
-                if is_insult:
-                    insult_range = 3
-                elif is_address:
-                    address_range = 3
-                elif is_weak_insult:
-                    weak_insult_range = 2
-
-                token_count += 1
-                if len(pattern) > 3:
-                    pattern = pattern[1:]
-
-            if len(tokens) == 0:
-                insults_ratio = 0
-            else:
-                insults_ratio = total_insults / len(tokens)
-
-            positive_texts += was_insult
-            # this_features.append(directed_insults)
-            this_features.append(len(text))
-            # this_features.append(total_insults)
-            this_features.append(insults_ratio)
-
+            this_features = self.text_features(text)
             features.append(this_features)
 
         print(positive_texts, positive_texts / len(texts))
@@ -224,16 +223,21 @@ class InsultDetector:
                 transformer_list=[
                     ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
                                               tokenizer=my_tokenizer)),
-                    ('insults', InsultFeatures(self.insult_words_regex,
-                                               self.address_words_regex,
-                                               self.weak_insult_words_regex))
+                    # ('insults', InsultFeatures(self.insult_words_regex,
+                    #                            self.address_words_regex,
+                    #                            self.weak_insult_words_regex))
                 ],
                 transformer_weights={
-                    'tfidf': 0.6,
-                    'insults': 1.0
+                    'tfidf': 1.0,
+                    # 'insults': 1.0
                 })),
 
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='poly', max_iter=1000))
+            ('clf',   SGDClassifier(class_weight='auto',
+                        n_jobs=-1,
+                        penalty='l2',
+                        alpha=5e-7,
+                        loss='hinge',
+                        n_iter=10))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
@@ -248,11 +252,27 @@ class InsultDetector:
                 for child in discussion['children']:
                     _iterate(child)
 
+        insult_features = InsultFeatures(self.insult_words_regex,
+                                         self.address_words_regex,
+                                         self.weak_insult_words_regex)
+
         if type(unlabeled_discussions[0]) is dict:  # for easier cross validation
             for root in unlabeled_discussions:
                 _iterate(root["root"])
         else:
-            return self.text_clf.predict(unlabeled_discussions)
+            predictions = []
+            cnt = 0
+            print(len(unlabeled_discussions))
+            predictions = self.text_clf.predict(unlabeled_discussions)
+            for i in range(len(predictions)):
+                features = insult_features.text_features(unlabeled_discussions[i])
+                if features[0] > 0:
+                    try:
+                        print(unlabeled_discussions[i])
+                    except:
+                        pass
+                    predictions[i] = True
+            return predictions
         return unlabeled_discussions
 
     def _grid_search(self, json_data):
@@ -398,7 +418,8 @@ class InsultDetector:
 
         self.train(dataset)
         print('Training done')
-        print(f1_score(target_test, self.text_clf.predict(data_test), pos_label=True))
+        predictions = self.classify(data_test)
+        print(f1_score(target_test, predictions, pos_label=True))
         print("--- %.1f ---" % ((time.time() - start_time) / 60))
 
     def _test_if_i_broke_something(self):
