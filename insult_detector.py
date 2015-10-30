@@ -233,7 +233,7 @@ class InsultDetector:
                     'insults': 1.0
                 })),
 
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='poly'))
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='poly', max_iter=1000))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
