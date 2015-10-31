@@ -15,6 +15,7 @@ from sklearn.base import TransformerMixin
 from sklearn.metrics import f1_score
 from sklearn.svm.classes import LinearSVC
 from sklearn.svm.classes import SVC
+from sklearn.preprocessing import StandardScaler
 
 import random
 
@@ -125,7 +126,7 @@ class InsultFeatures(TransformerMixin):
                 insults_ratio = total_insults / len(tokens)
 
             positive_texts += was_insult
-            # this_features.append(directed_insults)
+            this_features.append(directed_insults)
             this_features.append(len(text))
             # this_features.append(total_insults)
             this_features.append(insults_ratio)
@@ -229,11 +230,11 @@ class InsultDetector:
                                                self.weak_insult_words_regex))
                 ],
                 transformer_weights={
-                    'tfidf': 0.6,
+                    'tfidf': 1.0,
                     'insults': 1.0
                 })),
-
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='poly', max_iter=1000))
+            ('scaler', StandardScaler(with_mean=False)),
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='linear'))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
