@@ -122,7 +122,7 @@ class InsultDetector:
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.9,
                                                        ngram_range=(1, 2),
                                                        tokenizer=my_tokenizer)),
                                 ('clf',   SGDClassifier(class_weight='auto',
