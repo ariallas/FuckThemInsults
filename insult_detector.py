@@ -22,16 +22,13 @@ import random
 __author__ = 'tpc 2015'
 
 word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++")
-with open('stop_words.txt', mode='r', encoding='utf-8') as f:
-    stop_words = f.read().splitlines()
 
-
-def my_tokenizer(text):
+def my_tokenizer(text, stop_words=None):
     tokens = word_regexp.findall(text.lower())
     filtered_tokens = []
     for token in tokens:
         ch = token[0]
-        if token in stop_words:
+        if stop_words is not None and token in stop_words:
             continue
         if ch == ':' or ch == ';' or ch == '=' or ch == '%':
             token = ':)'
@@ -141,7 +138,7 @@ class InsultFeatures(TransformerMixin):
 
             positive_texts += was_insult
             this_features.append(directed_insults)
-            # this_features.append(len(text))
+            this_features.append(len(text))
             # this_features.append(total_insults)
             this_features.append(insults_ratio)
 
@@ -170,6 +167,8 @@ class InsultDetector:
             address_words = file.read().splitlines()
         with open('weak_insults.txt', mode='r', encoding='utf-8') as file:
             weak_insult_words = file.read().splitlines()
+        with open('stop_words.txt', mode='r', encoding='utf-8') as f:
+            self.stop_words = f.read().splitlines()
 
         self.text_clf = None
         self.insult_words_regex = self.create_regex(insult_words)
@@ -238,7 +237,8 @@ class InsultDetector:
             ('vect', FeatureUnion(
                 transformer_list=[
                     ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                              tokenizer=my_tokenizer)),
+                                              tokenizer=my_tokenizer,
+                                              stop_words=self.stop_words)),
                     ('insults', InsultFeatures(self.insult_words_regex,
                                                self.address_words_regex,
                                                self.weak_insult_words_regex))
@@ -249,7 +249,7 @@ class InsultDetector:
                 })),
             # ('todense', DenseTransformer()),
             ('scaler', StandardScaler(with_mean=False)),
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='rbf', C=230, max_iter=9000, gamma=3e-8))
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='rbf', C=240, max_iter=10000, gamma=3e-8))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
