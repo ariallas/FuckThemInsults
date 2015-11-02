@@ -10,3 +10,18 @@
                         alpha=1e-6,
                         loss='hinge',
                         n_iter=10))
+
+    def _test_split(self):
+        start_time = time.time()
+        json_file = open('discussions.json', encoding='utf-8', errors='replace')
+        # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
+        json_data = json.load(json_file)
+
+        dataset = self._json_to_dataset(json_data)
+        dataset['data'], data_test, dataset['target'], target_test \
+            = cross_validation.train_test_split(dataset['data'], dataset['target'], test_size=0.2, random_state=1)
+
+        self.train(dataset)
+        print('Training done')
+        print(f1_score(target_test, self.text_clf.predict(data_test), pos_label=True))
+        print("--- %.1f ---" % ((time.time() - start_time) / 60))
