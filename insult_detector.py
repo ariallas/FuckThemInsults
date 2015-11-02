@@ -51,6 +51,15 @@ def my_tokenizer(text):
     return filtered_tokens
 
 
+class DenseTransformer(TransformerMixin):
+    def transform(self, x, y=None, **fit_params):
+        print(x.shape)
+        return x.toarray()
+
+    def fit(self, X, y=None, **fit_params):
+        return self
+
+
 class InsultFeatures(TransformerMixin):
     def __init__(self, insult_words_regex, address_words_regex, weak_insult_words_regex):
         self.insult_words_regex = insult_words_regex
@@ -125,9 +134,14 @@ class InsultFeatures(TransformerMixin):
             else:
                 insults_ratio = total_insults / len(tokens)
 
+            if directed_insults > 2:
+                directed_insults = 1
+            else:
+                directed_insults /= 2
+
             positive_texts += was_insult
             this_features.append(directed_insults)
-            this_features.append(len(text))
+            # this_features.append(len(text))
             # this_features.append(total_insults)
             this_features.append(insults_ratio)
 
@@ -230,11 +244,12 @@ class InsultDetector:
                                                self.weak_insult_words_regex))
                 ],
                 transformer_weights={
-                    'tfidf': 1.0,
+                    'tfidf': 0.4,   # 3 2 4 4+len
                     'insults': 1.0
                 })),
+            # ('todense', DenseTransformer()),
             ('scaler', StandardScaler(with_mean=False)),
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='linear'))
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='rbf', C=230, max_iter=9000, gamma=3e-8))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
@@ -258,19 +273,31 @@ class InsultDetector:
 
     def _grid_search(self, json_data):
         dataset = self._json_to_dataset(json_data)
-
         # dataset = self._reduce_dataset(dataset)
+
         text_clf = Pipeline([
-            ('vect', FeatureUnion([
-                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                          tokenizer=my_tokenizer)),
-                ('addreses', InsultFeatures())
-            ])),
-            ('clf', SVC())
+            ('vect', FeatureUnion(
+                transformer_list=[
+                    ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
+                                              tokenizer=my_tokenizer)),
+                    ('insults', InsultFeatures(insult_words_regex=self.insult_words_regex,
+                                               address_words_regex=self.address_words_regex,
+                                               weak_insult_words_regex=self.weak_insult_words_regex))
+                ],
+                transformer_weights={
+                    'tfidf': 1.0,
+                    'insults': 1.0
+                })),
+            # ('todense', DenseTransformer()),
+            ('scaler', StandardScaler(with_mean=False)),
+            ('clf', SVC(verbose=True, class_weight='auto', kernel='linear', max_iter=10000))
         ])
-        parameters = {'clf__C': (0.5, 1, 5),
+
+        parameters = {'clf__C': (1, 10, 100),
                       'clf__kernel': ('linear', 'poly'),
-                      'clf__class_weight': ('auto', None)
+                      'clf__gamma': (1e-11, 1e-7, 1e-5),
+                      'vect__tfidf__ngram_range': [(1, 2)],
+                      'clf__class_weight': ['auto'],
                       # 'clf__loss': ('hinge', 'squared_hinge', 'squared_loss'),
                       # 'clf__penalty': ('l2', 'elasticnet', 'l1'),
                       # 'vect__tfidf__max_df': (0.75, 0.9, 1.0),
@@ -358,10 +385,10 @@ class InsultDetector:
         json_data = json.load(json_file)
 
         # self._cross_validate(json_data)
-        # self._grid_search(json_data)
+        self._grid_search(json_data)
         # self.test_tokenizer(json_data)
         # self.train(json_data)
-        self.plot_some_graphs(json_data)
+        # self.plot_some_graphs(json_data)
 
         # dataset = self._json_to_dataset(json_data)
         # at = AddressTransformet()
