@@ -20,7 +20,9 @@ word_regexp = re.compile(u"(?u)\w+"
                          u"|\(\(+"
                          u"|\)\)+"
                          u"|!+"
-                         u"|\?+")
+                         u"|\?+"
+                         u"|\+[0-9]+"
+                         u"|\++")
 
 def my_tokenizer(str):
     tokens = word_regexp.findall(str.lower())
@@ -37,6 +39,8 @@ def my_tokenizer(str):
             token = '?'
         elif ch == '!':
             token = '!'
+        elif ch == '+':
+            token = '+'
         filtered_tokens.append(token)
     return filtered_tokens
 
@@ -191,5 +195,5 @@ class InsultDetector:
 if __name__ == '__main__':
     d = InsultDetector()
     # d.test()
-    d._test_split()
+    d.test_split()
     # d._test_if_i_broke_something()
