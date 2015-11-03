@@ -56,6 +56,12 @@ class InsultFeatures(TransformerMixin):
         self.address_words_regex = address_words_regex
         self.weak_insult_words_regex = weak_insult_words_regex
 
+        self.insult_dict = dict()
+        self.normal_dict = dict()
+
+        self.mostly_insult_dict = dict()
+        self.mostly_normal_dict = dict()
+
     def transform(self, texts):
         features = []
 
@@ -142,16 +148,44 @@ class InsultFeatures(TransformerMixin):
         return features
 
     def fit(self, texts, y=None):
-        print(texts[:20])
-        print(y[:20])
+        total_insults = 0
+        total_normal = 0
 
-    def get_params(self, deep=True):
-        return {}
+        for i in range(len(y)):
+            if y[i]:
+                total_insults += 1
+                for token in texts[i]:
+                    self.insult_dict.setdefault(token[0], 0)
+                    self.insult_dict[token[0]] += 1
+            else:
+                total_normal += 1
+                for token in texts[i]:
+                    self.normal_dict.setdefault(token[0], 0)
+                    self.normal_dict[token[0]] += 1
 
-    def set_params(self, **parameters):
-        for parameter, value in parameters.items():
-            pass
-        return self
+        for key in self.insult_dict:
+            self.insult_dict[key] /= total_insults
+        for key in self.normal_dict:
+            self.normal_dict[key] /= total_normal
+
+        for key in self.insult_dict:
+            if key in self.normal_dict and self.insult_dict[key] / self.normal_dict[key] > 5:
+                self.mostly_insult_dict[key] = self.insult_dict[key] / self.normal_dict[key]
+            elif key not in self.normal_dict:
+                self.mostly_insult_dict[key] = 5000
+
+        for key in self.normal_dict:
+            if key in self.insult_dict and self.normal_dict[key] / self.insult_dict[key] > 5:
+                self.mostly_normal_dict[key] = self.normal_dict[key] / self.insult_dict[key]
+            elif key not in self.insult_dict:
+                self.mostly_normal_dict[key] = 5000
+
+        import operator
+        sorted_x = sorted(self.mostly_normal_dict.items(), key=operator.itemgetter(1))
+        for a in sorted_x:
+            print(a)
+
+        # return self
 
 
 class InsultDetector:
@@ -288,7 +322,7 @@ class InsultDetector:
         json_data = json.load(json_file)
         dataset = self._json_to_dataset(json_data)
 
-        a = self._get_parsed_data(dataset['data'])
+        # a = self._get_parsed_data(dataset['data'])
 
     def _test_split(self):
         start_time = time.time()
@@ -317,8 +351,8 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    d.test()
-    # d._test_split()
+    # d.test()
+    d._test_split()
 #     d._test_if_i_broke_something()
 #     m = pymorphy2.MorphAnalyzer()
-#     print(m.parse("?"))
+#     print(m.parse("аффтара"))
