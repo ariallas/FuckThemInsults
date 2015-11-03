@@ -73,9 +73,9 @@ class InsultDetector:
                                                        tokenizer=my_tokenizer)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
-                                                     alpha=5e-06,
+                                                     alpha=36e-07,
                                                      loss='squared_hinge',
-                                                     n_iter=10))])
+                                                     n_iter=100))])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
@@ -100,7 +100,7 @@ class InsultDetector:
         dataset = self._json_to_dataset(json_data)
         # text_clf = Pipeline([('vect',  TfidfVectorizer()),
         #                      ('clf',   SGDClassifier(class_weight='auto', n_jobs=-1))])
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75, ngram_range=(1, 2))),
+        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.9, ngram_range=(1, 2))),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
                                                      loss='squared_hinge',
