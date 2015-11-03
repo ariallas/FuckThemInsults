@@ -5,6 +5,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy import sparse
 import time
+import pymorphy2
+import pickle
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -21,7 +23,7 @@ import random
 
 __author__ = 'tpc 2015'
 
-word_regexp = re.compile(u"(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++")
+word_regexp = re.compile(u'(?u)\w+|:\)+|;\)+|:\-\)+|;\-\)+|%%\)|=\)+|\(\(+|\)\)+|!+|\?|\+[0-9]+|\++')
 
 def my_tokenizer(text, stop_words=None):
     tokens = word_regexp.findall(text.lower())
@@ -46,15 +48,6 @@ def my_tokenizer(text, stop_words=None):
             continue
         filtered_tokens.append(token)
     return filtered_tokens
-
-
-class DenseTransformer(TransformerMixin):
-    def transform(self, x, y=None, **fit_params):
-        print(x.shape)
-        return x.toarray()
-
-    def fit(self, X, y=None, **fit_params):
-        return self
 
 
 class InsultFeatures(TransformerMixin):
@@ -137,18 +130,20 @@ class InsultFeatures(TransformerMixin):
                 directed_insults /= 2
 
             positive_texts += was_insult
+
             this_features.append(directed_insults)
             this_features.append(len(text))
-            # this_features.append(total_insults)
+            this_features.append(total_insults)
             this_features.append(insults_ratio)
 
             features.append(this_features)
 
         print(positive_texts, positive_texts / len(texts))
-        return sparse.csr_matrix(features)
+        return features
 
     def fit(self, texts, y=None):
-        return self
+        print(texts[:20])
+        print(y[:20])
 
     def get_params(self, deep=True):
         return {}
@@ -234,22 +229,12 @@ class InsultDetector:
         # dataset = self._reduce_dataset(dataset)
 
         text_clf = Pipeline([
-            ('vect', FeatureUnion(
-                transformer_list=[
-                    ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                              tokenizer=my_tokenizer,
-                                              stop_words=self.stop_words)),
-                    ('insults', InsultFeatures(self.insult_words_regex,
-                                               self.address_words_regex,
-                                               self.weak_insult_words_regex))
-                ],
-                transformer_weights={
-                    'tfidf': 0.4,   # 3 2 4 4+len
-                    'insults': 1.0
-                })),
-            # ('todense', DenseTransformer()),
-            ('scaler', StandardScaler(with_mean=False)),
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='rbf', C=240, max_iter=10000, gamma=3e-8))
+            ('insults', InsultFeatures(self.insult_words_regex,
+                                       self.address_words_regex,
+                                       self.weak_insult_words_regex)),
+            ('scaler', StandardScaler()),
+            # ('clf', SVC(verbose=True, class_weight='auto', kernel='linear', C=1, max_iter=10000))
+            ('clf', LinearSVC(verbose=True, class_weight='auto', C=0.1))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
@@ -271,149 +256,40 @@ class InsultDetector:
             return self.text_clf.predict(unlabeled_discussions)
         return unlabeled_discussions
 
-    def _grid_search(self, json_data):
-        dataset = self._json_to_dataset(json_data)
-        # dataset = self._reduce_dataset(dataset)
+    def _get_parsed_data(self, data):
+        parsed_dataset = []
+        analyzer = pymorphy2.MorphAnalyzer()
+        analyzer.parse("абв")
+        with open('dd', 'rb') as input:
+            parsed_dataset = pickle.load(input)
+        return parsed_dataset
 
-        text_clf = Pipeline([
-            ('vect', FeatureUnion(
-                transformer_list=[
-                    ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                              tokenizer=my_tokenizer)),
-                    ('insults', InsultFeatures(insult_words_regex=self.insult_words_regex,
-                                               address_words_regex=self.address_words_regex,
-                                               weak_insult_words_regex=self.weak_insult_words_regex))
-                ],
-                transformer_weights={
-                    'tfidf': 1.0,
-                    'insults': 1.0
-                })),
-            # ('todense', DenseTransformer()),
-            ('scaler', StandardScaler(with_mean=False)),
-            ('clf', SVC(verbose=True, class_weight='auto', kernel='linear', max_iter=10000))
-        ])
+        total = len(data)
+        cnt = 0
 
-        parameters = {'clf__C': (1, 10, 100),
-                      'clf__kernel': ('linear', 'poly'),
-                      'clf__gamma': (1e-11, 1e-7, 1e-5),
-                      'vect__tfidf__ngram_range': [(1, 2)],
-                      'clf__class_weight': ['auto'],
-                      # 'clf__loss': ('hinge', 'squared_hinge', 'squared_loss'),
-                      # 'clf__penalty': ('l2', 'elasticnet', 'l1'),
-                      # 'vect__tfidf__max_df': (0.75, 0.9, 1.0),
-                      # 'vect__tfidf__use_idf': (True, False),
-                      # 'vect__addreses__var': (0, 1)
-                      }
-        gs_clf = GridSearchCV(text_clf, parameters, n_jobs=-1, scoring='f1', verbose=5)
-        gs_clf = gs_clf.fit(dataset['data'], dataset['target'])
-        best_parameters, score, _ = max(gs_clf.grid_scores_, key=lambda x: x[1])
-        for param_name in sorted(parameters.keys()):
-            print("%s: %r" % (param_name, best_parameters[param_name]))
-        print(score)
+        for text in data:
+            parsed_text = []
+            tokens = my_tokenizer(text, stop_words=self.stop_words)
+            for token in tokens:
+                parsed_token = analyzer.parse(token)[0]
+                parsed_text.append((parsed_token.normal_form, parsed_token.tag))
+            parsed_dataset.append(parsed_text)
 
-    def _cross_validate(self, json_data):
-        dataset = self._json_to_dataset(json_data)
-        # dataset = self._reduce_dataset(dataset)
+            cnt += 1
+            if cnt % 1000 == 0:
+                print('%r out of %r done (%.1f%%)' % (cnt, total, cnt / total * 100.0))
 
-        text_clf = Pipeline([
-            ('vect', FeatureUnion(
-                [
-                ('tfidf', TfidfVectorizer(ngram_range=(1, 2),
-                                          tokenizer=my_tokenizer)),
-                ('inaults', InsultFeatures())
-                ]
-            )),
-            ('clf',   SGDClassifier(class_weight='auto',
-                                    n_jobs=-1,
-                                    penalty='elasticnet',
-                                    alpha=9e-7,
-                                    loss='hinge',
-                                    n_iter=10))
-        ])
-        score = cross_validation.cross_val_score(text_clf,
-                                                 dataset['data'],
-                                                 dataset['target'],
-                                                 cv=5,
-                                                 scoring='f1',
-                                                 n_jobs=-1,
-                                                 verbose=5)
-        print(score)
-
-    def test_tokenizer(self, json_data):
-        dataset = self._json_to_dataset(json_data)
-
-        for text in dataset['data'][:20]:
-            try:
-                print(text)
-                print(my_tokenizer(text))
-            except:
-                pass
-        exit()
-
-    def plot_some_graphs(self, json_data):
-        dataset = self._json_to_dataset(json_data)
-        # dataset = self._reduce_dataset(dataset)
-        at = InsultFeatures(self.insult_words_regex, self.address_words_regex, self.weak_insult_words_regex)
-
-        ins = []
-        not_ins = []
-        for i in range(len(dataset['target'])):
-            if dataset['target'][i]:
-                ins.append(dataset['data'][i])
-            else:
-                not_ins.append(dataset['data'][i])
-
-        print(len(not_ins), len(ins))
-        ins_array = at.transform(ins).toarray()
-        not_ins_array = at.transform(not_ins).toarray()
-
-        rand_arr_ins = [random.random() * 10. for i in range(len(ins_array))]
-        rand_arr_not_ins = [random.random() * 10. for i in range(len(not_ins_array))]
-
-        # plt.plot(ins_array[:, 0], rand_arr_ins, 'r.')
-        # plt.plot(not_ins_array[:, 0], rand_arr_not_ins, 'b.')
-
-        plt.plot(ins_array[:, 0], ins_array[:, 1], 'r.')
-        plt.plot(not_ins_array[:, 0], not_ins_array[:, 1], 'b.')
-
-        plt.show()
+        return parsed_dataset
 
     def test(self):
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
         # json_file = open('test_discussions/learn.json', encoding='utf-8', errors='replace')
 
         json_data = json.load(json_file)
+        dataset = self._json_to_dataset(json_data)
 
-        # self._cross_validate(json_data)
-        self._grid_search(json_data)
-        # self.test_tokenizer(json_data)
-        # self.train(json_data)
-        # self.plot_some_graphs(json_data)
+        a = self._get_parsed_data(dataset['data'])
 
-        # dataset = self._json_to_dataset(json_data)
-        # at = AddressTransformet()
-        # ins = []
-        # for i in range(len(dataset['data'])):
-        #     if (dataset['target'][i]):
-        #         ins.append(dataset['data'][i])
-        # d = dict()
-        # for i in dataset['data']:
-        #     for tok in my_tokenizer(i):
-        #         for w in bad_words_part:
-        #             if w in tok:
-        #                 d.setdefault(tok, 0)
-        #                 d[tok] += 1
-        #         for w in bad_words_begin:
-        #             if tok.startswith(w):
-        #                 d.setdefault(tok, 0)
-        #                 d[tok] += 1
-        #
-        # import operator
-        # for i in sorted(d.items(), key=operator.itemgetter(1)):
-        #     if (i[1] > 10):
-        #         print(i)
-
-        # print(at.transform(ins))
     def _test_split(self):
         start_time = time.time()
         json_file = open('discussions.json', encoding='utf-8', errors='replace')
@@ -421,6 +297,8 @@ class InsultDetector:
         json_data = json.load(json_file)
 
         dataset = self._json_to_dataset(json_data)
+        dataset['data'] = self._get_parsed_data(dataset['data'])
+
         dataset['data'], data_test, dataset['target'], target_test \
             = cross_validation.train_test_split(dataset['data'], dataset['target'], test_size=0.2, random_state=1)
 
@@ -439,6 +317,8 @@ class InsultDetector:
 
 if __name__ == '__main__':
     d = InsultDetector()
-    # d.test()
-    d._test_split()
+    d.test()
+    # d._test_split()
 #     d._test_if_i_broke_something()
+#     m = pymorphy2.MorphAnalyzer()
+#     print(m.parse("?"))
