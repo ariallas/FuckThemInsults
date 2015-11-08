@@ -1,9 +1,11 @@
+from nltk.chat.rude import rude_chat
 
 __author__ = 'tpc 2015'
 
 import json
 import re
 import time
+import nltk
 
 from sklearn.linear_model import SGDClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -23,6 +25,7 @@ word_regexp = re.compile(u"(?u)\w+"
                          u"|\?+"
                          u"|\+[0-9]+"
                          u"|\++")
+rustem = nltk.stem.snowball.RussianStemmer()
 
 def my_tokenizer(str):
     tokens = word_regexp.findall(str.lower())
@@ -41,6 +44,8 @@ def my_tokenizer(str):
             token = '!'
         elif ch == '+':
             token = '+'
+        else:
+            token = rustem.stem(token)
         filtered_tokens.append(token)
     return filtered_tokens
 
@@ -52,17 +57,24 @@ class InsultDetector:
         dataset = dict(data=1, target=2)
         dataset['data'] = []
         dataset['target'] = []
+        cnt = [0, 0]
 
         def _iterate(json_data):
-            if 'text' in json_data and 'insult' in json_data and json_data['text']:
+            if 'text' in json_data and json_data['text']:
                 dataset['data'].append(json_data['text'])
-                dataset['target'].append(json_data['insult'])
+                if 'insult' in json_data and json_data['insult']:
+                    dataset['target'].append(True)
+                    cnt[0] += 1
+                else:
+                    dataset['target'].append(False)
+                    cnt[1] += 1
             if 'children' in json_data:
                 for child in json_data['children']:
                     _iterate(child)
 
         for root in json_data:
             _iterate(root["root"])
+        print("DONE CONVERTING", ' ', cnt, ' ', cnt[0] + cnt[1])
 
         return dataset
 
@@ -72,14 +84,14 @@ class InsultDetector:
         else:
             dataset = labeled_discussions
 
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.75,
-                                                       ngram_range=(1, 2),
+        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 4),
                                                        tokenizer=my_tokenizer)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
-                                                     alpha=36e-07,
-                                                     loss='squared_hinge',
-                                                     n_iter=100))])
+                                                     alpha=1e-07,
+                                                     penalty='l2',
+                                                     loss='hinge',
+                                                     n_iter=50))])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
@@ -126,20 +138,20 @@ class InsultDetector:
 
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
-        text_clf = Pipeline([('vect',  TfidfVectorizer(max_df=0.9,
-                                                       ngram_range=(1, 2),
+
+        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 4),
                                                        tokenizer=my_tokenizer)),
-                                ('clf',   SGDClassifier(class_weight='auto',
-                                                        n_jobs=-1,
-                                                        penalty='elasticnet',
-                                                        alpha=1e-6,
-                                                        loss='hinge',
-                                                        n_iter=10))
-                             ])
+                             ('clf',   SGDClassifier(class_weight='auto',
+                                                     n_jobs=-1,
+                                                     alpha=1e-06,
+                                                     penalty='l2',
+                                                     loss='hinge',
+                                                     n_iter=50))])
+
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
-                                                 cv=5,
+                                                 cv=4,
                                                  scoring='f1',
                                                  n_jobs=-1,
                                                  verbose=5)
@@ -195,5 +207,5 @@ class InsultDetector:
 if __name__ == '__main__':
     d = InsultDetector()
     # d.test()
-    d.test_split()
+    d._test_split()
     # d._test_if_i_broke_something()
