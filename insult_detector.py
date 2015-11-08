@@ -32,7 +32,7 @@ def my_tokenizer(text, stop_words=None):
         ch = token[0]
         if stop_words is not None and token in stop_words:
             continue
-        if ch == ':' or ch == ';' or ch == '=' or ch == '%':
+        if ch == ':' or ch == ';' or ch == '=' or ch == '%%':
             token = ':)'
         elif ch == '(':
             token = '('
@@ -65,12 +65,9 @@ class InsultFeatures(TransformerMixin):
     def transform(self, texts):
         features = []
 
-        positive_texts = 0
-
         # Some advanced level text processing!
         for text in texts:
             this_features = []
-            tokens = my_tokenizer(text)
 
             insult_range = 0
             address_range = 0
@@ -79,18 +76,26 @@ class InsultFeatures(TransformerMixin):
             directed_insults = 0
             total_insults = 0
             token_count = 0
+            total_addreses = 0
 
-            was_insult = 0
+            total_adj = 0
 
-            pattern = []
+            positive_weight = 0
+            negative_weight = 0
 
-            for token in tokens:
+            for parsed_token in text:
+                token = parsed_token[0]
+                tags = parsed_token[1]
+
                 is_address = False
                 is_insult = False
                 is_weak_insult = False
 
-                pattern.append(token)
-                if self.address_words_regex.match(token):
+                if 'ADJF' in tags or 'ADJS' in tags:
+                    total_adj += 1
+
+                if self.address_words_regex.match(token) or 'excl' in tags:
+                    total_addreses += 1
                     is_address = True
                 elif self.insult_words_regex.match(token):
                     is_insult = True
@@ -100,7 +105,6 @@ class InsultFeatures(TransformerMixin):
                 # Just insults, not super accurate..
                 if is_insult or (address_range > 0 or insult_range > 0) and is_weak_insult:
                     total_insults += 1
-                    was_insult = 1
 
                 # More direct insults
                 if \
@@ -108,7 +112,6 @@ class InsultFeatures(TransformerMixin):
                         or address_range > 0 and (is_insult or is_weak_insult) \
                         or weak_insult_range > 0 and (is_insult or is_address):
                     directed_insults += 1
-                    # print(pattern)
 
                 insult_range -= 1
                 address_range -= 1
@@ -121,30 +124,42 @@ class InsultFeatures(TransformerMixin):
                 elif is_weak_insult:
                     weak_insult_range = 2
 
-                token_count += 1
-                if len(pattern) > 3:
-                    pattern = pattern[1:]
+                if token in self.mostly_normal_dict:
+                    positive_weight += self.mostly_normal_dict[token]
+                if token in self.mostly_insult_dict:
+                    negative_weight += self.mostly_insult_dict[token]
 
-            if len(tokens) == 0:
+                token_count += 1
+
+            if len(text) == 0:
                 insults_ratio = 0
+                address_ratio = 0
+                directed_insult_ratio = 0
+                adj_ratio = 0
             else:
-                insults_ratio = total_insults / len(tokens)
+                insults_ratio = total_insults / len(text)
+                address_ratio = total_addreses / len(text)
+                directed_insult_ratio = directed_insults / len(text)
+                adj_ratio = total_adj / len(text)
 
             if directed_insults > 2:
                 directed_insults = 1
             else:
                 directed_insults /= 2
 
-            positive_texts += was_insult
-
-            this_features.append(directed_insults)
+            # this_features.append(directed_insults)
+            # this_features.append(adj_ratio)
+            this_features.append(directed_insult_ratio)
             this_features.append(len(text))
-            this_features.append(total_insults)
+            # this_features.append(total_insults)
             this_features.append(insults_ratio)
+            this_features.append(positive_weight - negative_weight)
+            this_features.append(positive_weight)
+            this_features.append(negative_weight)
+            # this_features.append(total_addreses)
 
             features.append(this_features)
 
-        print(positive_texts, positive_texts / len(texts))
         return features
 
     def fit(self, texts, y=None):
@@ -163,29 +178,33 @@ class InsultFeatures(TransformerMixin):
                     self.normal_dict.setdefault(token[0], 0)
                     self.normal_dict[token[0]] += 1
 
-        for key in self.insult_dict:
-            self.insult_dict[key] /= total_insults
-        for key in self.normal_dict:
-            self.normal_dict[key] /= total_normal
+        for key, value in list(self.insult_dict.items()):
+            if value > 0:
+                self.insult_dict[key] /= total_insults
+            else:
+                self.insult_dict.pop(key, None)
+        for key, value in list(self.normal_dict.items()):
+            if value > 1:
+                self.normal_dict[key] /= total_normal
+            else:
+                self.normal_dict.pop(key, None)
+
+        max_value = 20
+        min_threshold = 5
 
         for key in self.insult_dict:
-            if key in self.normal_dict and self.insult_dict[key] / self.normal_dict[key] > 5:
-                self.mostly_insult_dict[key] = self.insult_dict[key] / self.normal_dict[key]
+            if key in self.normal_dict and self.insult_dict[key] / self.normal_dict[key] > min_threshold:
+                self.mostly_insult_dict[key] = max(self.insult_dict[key] / self.normal_dict[key], max_value)
             elif key not in self.normal_dict:
-                self.mostly_insult_dict[key] = 5000
+                self.mostly_insult_dict[key] = max(self.insult_dict[key] * total_insults, max_value)
 
         for key in self.normal_dict:
-            if key in self.insult_dict and self.normal_dict[key] / self.insult_dict[key] > 5:
-                self.mostly_normal_dict[key] = self.normal_dict[key] / self.insult_dict[key]
+            if key in self.insult_dict and self.normal_dict[key] / self.insult_dict[key] > min_threshold:
+                self.mostly_normal_dict[key] = max(self.normal_dict[key] / self.insult_dict[key], max_value)
             elif key not in self.insult_dict:
-                self.mostly_normal_dict[key] = 5000
+                self.mostly_normal_dict[key] = max(self.normal_dict[key] * total_normal, max_value)
 
-        import operator
-        sorted_x = sorted(self.mostly_normal_dict.items(), key=operator.itemgetter(1))
-        for a in sorted_x:
-            print(a)
-
-        # return self
+        return self
 
 
 class InsultDetector:
@@ -267,8 +286,8 @@ class InsultDetector:
                                        self.address_words_regex,
                                        self.weak_insult_words_regex)),
             ('scaler', StandardScaler()),
-            # ('clf', SVC(verbose=True, class_weight='auto', kernel='linear', C=1, max_iter=10000))
-            ('clf', LinearSVC(verbose=True, class_weight='auto', C=0.1))
+            ('clf', SVC(verbose=True, class_weight='auto', C=100, max_iter=100000))
+            # ('clf', LinearSVC(verbose=True, class_weight='auto', C=0.04))
         ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
