@@ -12,7 +12,6 @@ from sklearn.pipeline import Pipeline
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
 from sklearn.metrics import f1_score
-from sklearn.svm.classes import SVC
 
 word_regexp = re.compile(u"(?u)\w+"
                          u"|:\)+"
@@ -57,10 +56,45 @@ def my_tokenizer(text):
         #     token = '@'
         # elif weak_insult_words_regex.match(token):
         #     token = '&'
-        else:
-            token = token  # rustem.stem(token)
         filtered_tokens.append(token)
     return filtered_tokens
+
+
+def my_analyzer(text):
+
+    ngram_range = 2
+    masked_ngram_range = 2
+    words = my_tokenizer(text)
+    ngram_words = []
+    masked_ngram_words = []
+
+    for w in words:
+        if insult_words_regex.match(w):
+            masked_w = '#'
+        elif address_words_regex.match(w):
+            masked_w = '@'
+        elif weak_insult_words_regex.match(w):
+            masked_w = '&'
+        else:
+            masked_w = '*'
+        yield masked_w
+        ngram = masked_w
+        for p in masked_ngram_words:
+            ngram = p + ' ' + ngram
+            yield ngram
+        masked_ngram_words.insert(0, masked_w)
+        if len(masked_ngram_words) > masked_ngram_range:
+            masked_ngram_words.pop()
+
+        # w = rustem.stem(w)
+        yield w
+        ngram = w
+        for p in ngram_words:
+            ngram = p + ' ' + ngram
+            yield ngram
+        ngram_words.insert(0, w)
+        if len(ngram_words) > ngram_range:
+            ngram_words.pop()
 
 
 class InsultDetector:
@@ -113,6 +147,30 @@ class InsultDetector:
         return dataset
 
     @staticmethod
+    def _reduce_dataset(dataset):
+        set_length = len(dataset['data'])
+        num_insults = 0
+
+        reduced_dataset = dict(data=1, target=2)
+        reduced_dataset['data'] = []
+        reduced_dataset['target'] = []
+
+        for i in range(set_length):
+            if dataset['target'][i]:
+                num_insults += 1
+                reduced_dataset['data'].append(dataset['data'][i])
+                reduced_dataset['target'].append(True)
+        step = set_length / num_insults
+
+        for i in range(0, set_length,  round(step)):
+            if not dataset['target'][i]:
+                reduced_dataset['data'].append(dataset['data'][i])
+                reduced_dataset['target'].append(False)
+
+        print(len(reduced_dataset['data']), num_insults)
+        return reduced_dataset
+
+    @staticmethod
     def create_regex(expression_list):
         regex_str = '^('
         for exp in expression_list:
@@ -122,20 +180,25 @@ class InsultDetector:
         return regex
 
     def train(self, labeled_discussions):
-        if (type(labeled_discussions) is list): # for cross validation
+        if type(labeled_discussions) is list: # for cross validation
             dataset = self._json_to_dataset(labeled_discussions)
         else:
             dataset = labeled_discussions
 
+        global insult_words_regex, address_words_regex, weak_insult_words_regex
+        insult_words_regex = self.insult_words_regex
+        address_words_regex = self.address_words_regex
+        weak_insult_words_regex = self.weak_insult_words_regex
+
         text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 2),
-                                                       tokenizer=my_tokenizer,
+                                                       analyzer=my_analyzer,
                                                        sublinear_tf=True)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
-                                                     alpha=6e-07,
+                                                     alpha=5e-08,
                                                      penalty='l2',
                                                      loss='hinge',
-                                                     n_iter=50))
+                                                     n_iter=55))
                              # ('clf', SVC(class_weight='auto', verbose=5))
         ])
 
@@ -185,21 +248,22 @@ class InsultDetector:
     def _cross_validate(self, json_data):
         dataset = self._json_to_dataset(json_data)
 
-        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 4),
-                                                       tokenizer=my_tokenizer)),
+        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 2),
+                                                       analyzer=my_analyzer,
+                                                       sublinear_tf=True)),
                              ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
-                                                     alpha=1e-06,
+                                                     alpha=3e-07,
                                                      penalty='l2',
                                                      loss='hinge',
-                                                     n_iter=50))])
+                                                     n_iter=55))])
 
         score = cross_validation.cross_val_score(text_clf,
                                                  dataset['data'],
                                                  dataset['target'],
-                                                 cv=4,
+                                                 cv=5,
                                                  scoring='f1',
-                                                 n_jobs=-1,
+                                                 # n_jobs=-1,
                                                  verbose=5)
         print(score)
 
@@ -212,7 +276,9 @@ class InsultDetector:
             try:
                 if target:
                     print(text)
-                    print(my_tokenizer(text))
+                    for i in my_analyzer(text):
+                        print(i)
+                        # pass
             except:
                 pass
         exit()
@@ -239,9 +305,9 @@ class InsultDetector:
 
         json_data = json.load(json_file)
 
-        # self._cross_validate(json_data)
+        self._cross_validate(json_data)
         # self._grid_search(json_data)
-        self.test_tokenizer(json_data)
+        # self.test_tokenizer(json_data)
         # self.train(json_data)
 
     def _test_if_i_broke_something(self):
@@ -253,8 +319,8 @@ class InsultDetector:
         json_test_data = json.load(json_test)
         print(self.classify(json_test_data))
 
-if __name__ == '__main__':
-    d = InsultDetector()
-    # d.test()
-    d._test_split()
+# if __name__ == '__main__':
+#     d = InsultDetector()
+#     d.test()
+    # d._test_split()
     # d._test_if_i_broke_something()
