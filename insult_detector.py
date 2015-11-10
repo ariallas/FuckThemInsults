@@ -1,5 +1,3 @@
-from nltk.chat.rude import rude_chat
-
 __author__ = 'tpc 2015'
 
 import json
@@ -49,10 +47,19 @@ def my_tokenizer(text):
             token = '!'
         elif ch == '+':
             token = '+'
+        elif ch.isdigit():
+            continue
+        # elif insult_words_regex.match(token):
+        #     token = '#'
+        # elif address_words_regex.match(token):
+        #     token = '@'
+        # elif weak_insult_words_regex.match(token):
+        #     token = '&'
         else:
-            token = rustem.stem(token)
+            token = token  # rustem.stem(token)
         filtered_tokens.append(token)
     return filtered_tokens
+
 
 class InsultDetector:
     def __init__(self):
@@ -120,7 +127,7 @@ class InsultDetector:
 
         text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 3),
                                                        tokenizer=my_tokenizer)),
-                             ('clf',   SGDClassifier(class_weight='auto',
+                             ('clf',   SGDClassifier(class_weight={True: 7, False: 1},
                                                      n_jobs=-1,
                                                      alpha=5e-07,
                                                      penalty='l2',
@@ -194,11 +201,13 @@ class InsultDetector:
     def test_tokenizer(self, json_data):
         dataset = self._json_to_dataset(json_data)
 
-        tok = TfidfVectorizer().build_tokenizer()
-        for text in dataset['data'][:20]:
+        for i in range(2000):
+            text = dataset['data'][i]
+            target = dataset['target'][i]
             try:
-                print(text)
-                print(my_tokenizer(text))
+                if target:
+                    print(text)
+                    print(my_tokenizer(text))
             except:
                 pass
         exit()
@@ -225,9 +234,9 @@ class InsultDetector:
 
         json_data = json.load(json_file)
 
-        self._cross_validate(json_data)
+        # self._cross_validate(json_data)
         # self._grid_search(json_data)
-        # self.test_tokenizer(json_data)
+        self.test_tokenizer(json_data)
         # self.train(json_data)
 
     def _test_if_i_broke_something(self):
