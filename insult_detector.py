@@ -6,11 +6,13 @@ import time
 import nltk
 
 from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import SGDRegressor
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn import cross_validation
 from sklearn.grid_search import GridSearchCV
 from sklearn.metrics import f1_score
+from sklearn.svm.classes import SVC
 
 word_regexp = re.compile(u"(?u)\w+"
                          u"|:\)+"
@@ -125,14 +127,17 @@ class InsultDetector:
         else:
             dataset = labeled_discussions
 
-        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 3),
-                                                       tokenizer=my_tokenizer)),
-                             ('clf',   SGDClassifier(class_weight={True: 7, False: 1},
+        text_clf = Pipeline([('vect',  TfidfVectorizer(ngram_range=(1, 2),
+                                                       tokenizer=my_tokenizer,
+                                                       sublinear_tf=True)),
+                             ('clf',   SGDClassifier(class_weight='auto',
                                                      n_jobs=-1,
-                                                     alpha=5e-07,
+                                                     alpha=6e-07,
                                                      penalty='l2',
                                                      loss='hinge',
-                                                     n_iter=50))])
+                                                     n_iter=50))
+                             # ('clf', SVC(class_weight='auto', verbose=5))
+        ])
 
         self.text_clf = text_clf.fit(dataset['data'], dataset['target'])
 
