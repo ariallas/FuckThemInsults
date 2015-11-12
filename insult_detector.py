@@ -198,7 +198,7 @@ class InsultDetector:
                                                      alpha=5e-08,
                                                      penalty='l2',
                                                      loss='hinge',
-                                                     n_iter=55))
+                                                     n_iter=500))
                              # ('clf', SVC(class_weight='auto', verbose=5))
         ])
 
@@ -319,8 +319,8 @@ class InsultDetector:
         json_test_data = json.load(json_test)
         print(self.classify(json_test_data))
 
-# if __name__ == '__main__':
-#     d = InsultDetector()
+if __name__ == '__main__':
+    d = InsultDetector()
 #     d.test()
-    # d._test_split()
+    d._test_split()
     # d._test_if_i_broke_something()
